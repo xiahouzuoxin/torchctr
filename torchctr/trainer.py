@@ -1,4 +1,5 @@
 import os
+from typing import Callable
 import numpy as np
 import json
 
@@ -20,6 +21,8 @@ class Trainer:
                  save_ckpt_path=None,
                  ckpt_file_prefix='checkpoint',
                  logger=logger,
+                 training_step_func = None,
+                 validation_step_func = None,
                  **kwargs):
         """
         Initializes the Trainer object.
@@ -32,6 +35,8 @@ class Trainer:
             early_stopping_rounds (int, optional): The number of rounds to wait for early stopping. Defaults to None.
             save_ckpt_path (str, optional): The path to save the checkpoint files. Defaults to None.
             logger ([type], optional): The logger object. Defaults to logger.
+            training_step_func (batch, batch_idx): The training step function. Defaults to use the model's `training_step` method.
+            validation_step_func (batch, batch_idx): The validation step function. Defaults to use the model's `validation_step` method.
         """
         self.model = model
         self.optimizer = optimizer
@@ -60,6 +65,9 @@ class Trainer:
         self.max_epochs = max_epochs
         self.early_stopping_rounds = early_stopping_rounds
 
+        self.training_step_func = training_step_func if training_step_func is not None else self.model.training_step
+        self.validation_step_func = validation_step_func if validation_step_func is not None else self.model.validation_step
+
         # all kwargs are saved as attributes
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -73,7 +81,7 @@ class Trainer:
             eval_loss = {'loss': 0.}
 
             for k, batch in enumerate(eval_dataloader):
-                loss = model.validation_step(batch, k)
+                loss = self.validation_step_func(batch, k)
 
                 if isinstance(loss, dict):
                     eval_loss = {n: eval_loss.get(n,0) + v.item() for n, v in loss.items()}
@@ -133,7 +141,7 @@ class Trainer:
             # Training 
             for k, batch in enumerate(train_dataloader):
                 self.optimizer.zero_grad()   # zero the parameter gradients
-                loss = self.model.training_step(batch, k)
+                loss = self.training_step_func(batch, k)
 
                 # accumulate losses and compute gradients
                 if isinstance(loss, dict):

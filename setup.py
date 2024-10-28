@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 def find_version():
-    with open("torchrec/__init__.py", "r", encoding="utf-8") as rf:
+    with open("torchctr/__init__.py", "r", encoding="utf-8") as rf:
         version_file = rf.read()
     version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", version_file, re.M)
     if version_match:
@@ -17,14 +17,14 @@ with open("requirements.txt", "r", encoding="utf-8") as rf:
     requirements = [line.strip() for line in rf.readlines()]
 
 setup(
-    name='torchrec',
+    name='torchctr',
     version=find_version(),
     author='zuoxin.xiahou',
     author_email='xiahouzuoxin@163.com',
     description='A small pytorch implementation for ctr prediction in recommendation system for small companies',
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/xiahouzuoxin/torchrec",
+    url="https://github.com/xiahouzuoxin/torchctr",
     packages=find_packages(),
     install_requires=requirements,
     python_requires='>=3.10',

@@ -45,7 +45,7 @@ class DataFrameDataset(Dataset):
         Example of using it in DataLoader:
             ```python
             from torch.utils.data import DataLoader
-            from torchrec import DataFrameDataset
+            from torchctr import DataFrameDataset
 
             ds = DataFrameDataset(df, feat_configs, target_cols, is_raw=True, n_jobs=8)
             DataLoader(ds, collate_fn=ds.collate_fn, batch_size=32, shuffle=True)

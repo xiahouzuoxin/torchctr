@@ -11,9 +11,9 @@ Supported features include:
   * Numerical: standard or 0-1 normalization, automatic discretization, automatic update of statistical number for standard or 0-1 normalization if new data is fed in
 * Variable-length sequence feature support, if there's order in the sequence, please put the latest data before the oldest data as it may pads at the end of the sequence
 * Sequence features support weights by setting the weight column
-* Implemented [DataFrameDataset](./torchrec/dataset.py) for straightforward training with input data of pandas/polars DataFrame format
-* Implemented a common [Trainer](./torchrec/trainer.py) for training pytorch models, and save/load the results
-* Basic FastAPI for [Model API Serving](./torchrec/serving/serve.py)
+* Implemented [DataFrameDataset](./torchctr/dataset.py) for straightforward training with input data of pandas/polars DataFrame format
+* Implemented a common [Trainer](./torchctr/trainer.py) for training pytorch models, and save/load the results
+* Basic FastAPI for [Model API Serving](./torchctr/serving/serve.py)
 
 Not supported:
 
@@ -22,32 +22,32 @@ Not supported:
 # Install
 
 ```
-pip install git+https://github.com/xiahouzuoxin/torchrec
+pip install git+https://github.com/xiahouzuoxin/torchctr
 ```
 
 # [Example](./examples/train_amazon.ipynb)
 
-1. Using [DataFrameDataset](./torchrec/dataset.py) to load the raw data as pytorch Dataset format
-2. Create a model definition file in `torchrec/models`, and implement the model by inherit from nn.Module but with some extra member methods,
+1. Using [DataFrameDataset](./torchctr/dataset.py) to load the raw data as pytorch Dataset format
+2. Create a model definition file in `torchctr/models`, and implement the model by inherit from nn.Module but with some extra member methods,
     - required:
       - training_step
       - validation_step
     - optional:
       - configure_optimizers
       - configure_lr_scheduler
-3. Using [Trainer](./torchrec/trainer.py) to train the model
-4. Serving the model by [Model API Serving](./torchrec/serving/serve.py)
+3. Using [Trainer](./torchctr/trainer.py) to train the model
+4. Serving the model by [Model API Serving](./torchctr/serving/serve.py)
 
-# [Model API Serving](./torchrec/serving/serve.py)
+# [Model API Serving](./torchctr/serving/serve.py)
 
-1. [Optional] According to your model and data processing, maybe need create a new ServingModel like [BaseServingModel](./torchrec/serving/model_def.py)
+1. [Optional] According to your model and data processing, maybe need create a new ServingModel like [BaseServingModel](./torchctr/serving/model_def.py)
 2. Set up the service:
     - Debuging: Given service name and model path from command line
       ```
-      cd $torchrec_root
-      python -m torchrec.serving.serve --name [name] --path [path/to/model or path/to/ckpt] --serving_class BaseServingModel
+      cd $torchctr_root
+      python -m torchctr.serving.serve --name [name] --path [path/to/model or path/to/ckpt] --serving_class BaseServingModel
       ```
-    - Production: write the command line parameters to `serving_models` variable in [torchrec/serving/serve.py](torchrec/serving/serve.py)
+    - Production: write the command line parameters to `serving_models` variable in [torchctr/serving/serve.py](torchctr/serving/serve.py)
 
 3. Test the service: reference `test_predict` in [example](./examples/train_amazon.ipynb)
 
