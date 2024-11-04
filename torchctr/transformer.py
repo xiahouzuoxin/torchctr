@@ -20,7 +20,7 @@ class FeatureTransformer:
                  numerical_update_stats=False,
                  list_padding_value=None,
                  list_padding_maxlen=None,
-                 outliers_category=['','None','none','nan','NaN','NAN','NaT','unknown','Unknown','Other','other','others','Others','REJ','Reject','REJECT','Rejected'], 
+                 outliers_category=[], 
                  outliers_numerical=[], 
                  update_configs=False,
                  verbose=False):
