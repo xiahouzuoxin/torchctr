@@ -22,7 +22,7 @@ class FeatureTransformer:
                  list_padding_maxlen=None,
                  outliers_category=['','None','none','nan','NaN','NAN','NaT','unknown','Unknown','Other','other','others','Others','REJ','Reject','REJECT','Rejected'], 
                  outliers_numerical=[], 
-                 feat_configs_replace=False,
+                 update_configs=False,
                  verbose=False):
         """
         Feature transforming for both train and test dataset.
@@ -43,8 +43,9 @@ class FeatureTransformer:
             outliers_numerical: list, outliers for numerical features
             verbose: bool, whether to print the processing details
             n_jobs: int, number of parallel jobs
+            update_configs: bool, whether to update the feat_configs when is_train=True or copy a new feat_configs object to avoid in-place modification
         """
-        self.feat_configs = feat_configs if feat_configs_replace else deepcopy(feat_configs)
+        self.feat_configs = feat_configs if update_configs else deepcopy(feat_configs)
         self.category_force_hash = category_force_hash
         self.category_dynamic_vocab = category_dynamic_vocab
         self.category_min_freq = category_min_freq
@@ -346,7 +347,7 @@ class FeatureTransformer:
         padding_value = feat_config.get('padding_value', self.list_padding_value)
         if padding_value and dtype == 'category':
             max_len = min([s.map(len).max(), max_len]) if max_len else s.map(len).max()
-            s = s.map(lambda x: pad_list([x], padding_value, max_len))
+            s = s.map(lambda x: pad_list([x], padding_value, max_len)[0])
         return s, updated_f
     
     def get_feat_configs(self):
@@ -534,5 +535,5 @@ class FeatureTransformerPolars(FeatureTransformer):
         if padding_value and dtype == 'category':
             _max_len = s.map_elements(len, return_dtype=pl.Int32).max()
             max_len = min([_max_len, max_len]) if max_len else _max_len
-            s = s.map_elements(lambda x: pad_list([x], padding_value, max_len), return_dtype=pl.List)
+            s = s.map_elements(lambda x: pad_list([x], padding_value, max_len)[0], return_dtype=pl.List)
         return s, updated_f

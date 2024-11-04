@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import json
+import joblib
 
 def auto_generate_feature_configs(
         df: pd.DataFrame, 
@@ -92,3 +93,24 @@ def jsonify(obj):
             return None
         raise TypeError(repr(obj) + " is not JSON serializable")
     return json.loads(json.dumps(obj, default=encoder))
+
+def persist_to_file(file_path):
+    '''persist obj to file by joblib
+    return: decorated function
+    '''
+    def decorator(func):
+        try:
+            cache = joblib.load(file_path)
+        except (IOError, FileNotFoundError, ValueError, EOFError):
+            cache = None
+
+        def wrapper(*args, **kwargs):
+            if cache is not None:
+                return cache
+            result = func(*args, **kwargs)
+            joblib.dump(result, file_path)
+            return result
+        
+        return wrapper
+
+    return decorator

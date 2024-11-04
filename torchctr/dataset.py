@@ -56,7 +56,7 @@ class DataFrameDataset(Dataset):
 
         self.list_padding_value = kwargs.get('list_padding_value', -100)
         self.list_padding_maxlen = kwargs.get('list_padding_maxlen', 256)
-        self.list_padding_in_collate_fn = kwargs.get('list_padding_in_collate_fn', True) # whether to padding in collate_fn
+        self.list_padding_in_collate_fn = kwargs.get('list_padding_in_collate_fn', False) # whether to padding in collate_fn
         
         if is_raw:
             assert 'is_train' in kwargs, 'is_train parameter should be provided when is_raw=True'
@@ -120,13 +120,13 @@ class DataFrameDataset(Dataset):
                 elif isinstance(df, pl.DataFrame):
                     df = df.with_columns(
                         (
-                            pl.col(col).map_elements(lambda x: pad_list([x], list_padding_value, list_padding_maxlen), return_dtype=pl.List),
+                            pl.col(col).map_elements(lambda x: pad_list([x], list_padding_value, list_padding_maxlen)[0], return_dtype=pl.List),
                         ).alias(col)
                     )
                     if col in self.weight_cols_mapping:
                         df = df.with_columns(
                             (
-                                pl.col(f'{col}_wgt').map_elements(lambda x: pad_list([x], 0., list_padding_maxlen), return_dtype=pl.List)
+                                pl.col(f'{col}_wgt').map_elements(lambda x: pad_list([x], 0., list_padding_maxlen)[0], return_dtype=pl.List)
                             ).alias(f'{col}_wgt')
                         )
 
