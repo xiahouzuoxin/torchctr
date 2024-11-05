@@ -7,10 +7,13 @@ import logging
 def get_logger(name, level=logging.INFO):
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    # prevent duplicate logs
+    logger.propagate = False
     # Prevent duplicate handlers
     if not logger.hasHandlers():
         formatter = logging.Formatter(
-            '%(asctime)s %(name)s %(levelname)s - %(filename)s:%(lineno)d %(message)s'
+            '%(asctime)s %(name)s %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
         )
         ch = logging.StreamHandler()
         ch.setFormatter(formatter)
