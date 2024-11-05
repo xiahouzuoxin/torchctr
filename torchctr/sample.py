@@ -1,5 +1,6 @@
 import numpy as np
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from .utils import logger
 
 def traintest_split(df, test_size=0.2, shuffle=True, group_id=None, random_state=0):
     if group_id is None:
@@ -24,8 +25,8 @@ def traintest_split_by_date(df, date_col, test_size=0.2, shuffle=True, random_st
     n_train_dates = int(len(uniq_dates) * (1 - test_size)) + 1
     assert n_train_dates < len(uniq_dates)
     split_pos = uniq_dates[n_train_dates]
-    print(f'Train set date range [{uniq_dates[0]}, {split_pos}]')
-    print(f'Test  set date range ({split_pos}, {uniq_dates[-1]}]')
+    logger.info(f'Train set date range [{uniq_dates[0]}, {split_pos}]')
+    logger.info(f'Test  set date range ({split_pos}, {uniq_dates[-1]}]')
     
     train_df = df[df[date_col] <= split_pos]
     test_df  = df[df[date_col] >  split_pos]

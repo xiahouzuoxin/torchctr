@@ -4,7 +4,7 @@ import pandas as pd
 import polars as pl
 from sklearn.utils import murmurhash3_32
 from joblib import Parallel, delayed
-from .utils import pad_list, jsonify
+from .utils import pad_list, jsonify, logger
 
 pd.options.mode.chained_assignment = None  # default='warn'
 pd.options.display.max_rows = 999
@@ -69,8 +69,8 @@ class FeatureTransformer:
             df: pandas DataFrame, transformed dataset
         """
         if self.verbose:
-            print(f'==> Feature transforming (is_train={is_train}), note that feat_configs will be updated when is_train=True...')
-            print(f'Input dataFrame type: {type(df)}, transform it by {self.__class__.__name__}')
+            logger.info(f'Feature transforming (is_train={is_train}), note that feat_configs will be updated when is_train=True...')
+            logger.info(f'Input dataFrame type: {type(df)}, transform it by {self.__class__.__name__}')
 
         if n_jobs <= 1:
             for k, f in enumerate(self.feat_configs):
@@ -119,7 +119,7 @@ class FeatureTransformer:
                 s = s.map_elements(pre_transform)
 
         if self.verbose:
-            print(f'Processing feature {fname}...')
+            logger.info(f'Processing feature {fname}...')
 
         if islist:
             updated_s, updated_f = self.process_list(f, s, is_train)
@@ -202,7 +202,7 @@ class FeatureTransformer:
                 hash_buckets = hash_buckets // 10
 
             if self.verbose:
-                print(f'Forcing hash category {name} with hash_buckets={hash_buckets}...')
+                logger.info(f'Forcing hash category {name} with hash_buckets={hash_buckets}...')
 
             if is_train:
                 feat_config['hash_buckets'] = hash_buckets
@@ -226,7 +226,7 @@ class FeatureTransformer:
 
         if hash_buckets:
             if self.verbose:
-                print(f'Hashing category {name} with hash_buckets={hash_buckets}...')
+                logger.info(f'Hashing category {name} with hash_buckets={hash_buckets}...')
             if is_train:
                 # update feat_config
                 feat_config['num_embeddings'] = hash_buckets
@@ -238,7 +238,7 @@ class FeatureTransformer:
             s = s.map(lambda x: self.hash(x, hash_buckets)).astype(int)
         else:
             if self.verbose:
-                print(f'Converting category {name} to indices...')
+                logger.info(f'Converting category {name} to indices...')
             if is_train:
                 if 'vocab' not in feat_config:
                     feat_config['vocab'] = {}
@@ -260,7 +260,7 @@ class FeatureTransformer:
                     feat_config['vocab'][oov] = {'idx': 0, 'freq_cnt': 0}
 
                 if self.verbose:
-                    print(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
+                    logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
 
                 feat_config['num_embeddings'] = idx + 1
 
@@ -294,7 +294,7 @@ class FeatureTransformer:
                 feat_config['min'], feat_config['max'] = self.update_minmax(s, min_val=feat_config.get('min'), max_val=feat_config.get('max'))
 
             if self.verbose:
-                print(f'Feature {feat_config["name"]} mean: {feat_config["mean"]}, std: {feat_config["std"]}, min: {feat_config["min"]}, max: {feat_config["max"]}')
+                logger.info(f'Feature {feat_config["name"]} mean: {feat_config["mean"]}, std: {feat_config["std"]}, min: {feat_config["min"]}, max: {feat_config["max"]}')
 
             if discretization:
                 hash_buckets = 10 if hash_buckets is None else hash_buckets
@@ -327,7 +327,7 @@ class FeatureTransformer:
         # if column is string type, split by comma, make sure no space between comma
         if isinstance(s.iat[0], str):
             if self.verbose:
-                print(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
+                logger.info(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
             s = s.str.split(',')
             if dtype == 'numerical':
                 s = s.map(lambda x: [float(v) for v in x if v])
@@ -386,7 +386,7 @@ class FeatureTransformerPolars(FeatureTransformer):
                 hash_buckets = hash_buckets // 10
 
             if self.verbose:
-                print(f'Forcing hash category {name} with hash_buckets={hash_buckets}...')
+                logger.info(f'Forcing hash category {name} with hash_buckets={hash_buckets}...')
 
             if is_train:
                 feat_config['hash_buckets'] = hash_buckets
@@ -406,7 +406,7 @@ class FeatureTransformerPolars(FeatureTransformer):
 
         if hash_buckets:
             if self.verbose:
-                print(f'Hashing category {name} with hash_buckets={hash_buckets}...')
+                logger.info(f'Hashing category {name} with hash_buckets={hash_buckets}...')
             if is_train:
                 # update feat_config
                 feat_config['num_embeddings'] = hash_buckets
@@ -418,7 +418,7 @@ class FeatureTransformerPolars(FeatureTransformer):
             s = s.map_elements(lambda x: self.hash(x, hash_buckets), return_dtype=pl.Int32)
         else:
             if self.verbose:
-                print(f'Converting category {name} to indices...')
+                logger.info(f'Converting category {name} to indices...')
             if is_train:
                 if len(feat_config.get('vocab', {})) == 0:
                     feat_config['vocab'] = {}
@@ -439,7 +439,7 @@ class FeatureTransformerPolars(FeatureTransformer):
                     feat_config['vocab'][oov] = {'idx': 0, 'freq_cnt': 0}
 
                 if self.verbose:
-                    print(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
+                    logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
 
                 feat_config['num_embeddings'] = idx + 1
 
@@ -473,7 +473,7 @@ class FeatureTransformerPolars(FeatureTransformer):
                 feat_config['min'], feat_config['max'] = self.update_minmax(s, min_val=feat_config.get('min'), max_val=feat_config.get('max'))
 
             if self.verbose:
-                print(f'Feature {feat_config["name"]} mean: {feat_config["mean"]}, std: {feat_config["std"]}, min: {feat_config["min"]}, max: {feat_config["max"]}')
+                logger.info(f'Feature {feat_config["name"]} mean: {feat_config["mean"]}, std: {feat_config["std"]}, min: {feat_config["min"]}, max: {feat_config["max"]}')
 
             if discretization:
                 hash_buckets = 10 if hash_buckets is None else hash_buckets
@@ -507,7 +507,7 @@ class FeatureTransformerPolars(FeatureTransformer):
         # if column is string type, split by comma, make sure no space between comma
         if s.dtype == pl.String:
             if self.verbose:
-                print(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
+                logger.info(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
             s = s.str.split(',')
             if dtype == 'numerical':
                 s = s.map_elements(lambda x: [float(v) for v in x if v], return_dtype=pl.List)

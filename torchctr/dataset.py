@@ -4,7 +4,7 @@ import polars as pl
 import torch
 import torch.utils
 from torch.utils.data import Dataset
-from .utils import pad_list
+from .utils import pad_list, logger
 from .transformer import FeatureTransformer, FeatureTransformerPolars
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -82,7 +82,7 @@ class DataFrameDataset(Dataset):
             df = self.transformer.transform(df, is_train=is_train, n_jobs=n_jobs)
             feat_configs = self.transformer.get_feat_configs()
             if verbose:
-                print(f'==> Feature transforming (is_train={is_train}) done...')
+                logger.info(f'Feature transforming (is_train={is_train}) done...')
 
         self.dense_cols = [f['name'] for f in feat_configs if f['type'] == 'dense' and not f.get('islist')]
         self.seq_dense_cols = [f['name'] for f in feat_configs if f['type'] == 'dense' and f.get('islist')]
@@ -94,12 +94,12 @@ class DataFrameDataset(Dataset):
         self.seq_sparse_configs = {f['name']: f for f in feat_configs if f['type'] == 'sparse' and f.get('islist')}
 
         if verbose:
-            print(f'==> Dense features: {self.dense_cols}')
-            print(f'==> Sparse features: {self.sparse_cols}')
-            print(f'==> Sequence dense features: {self.seq_dense_cols}')
-            print(f'==> Sequence sparse features: {self.seq_sparse_cols}')
-            print(f'==> Weight columns mapping: {self.weight_cols_mapping}')
-            print(f'==> Target columns: {self.target_cols}')
+            logger.info(f'Dense features: {self.dense_cols}')
+            logger.info(f'Sparse features: {self.sparse_cols}')
+            logger.info(f'Sequence dense features: {self.seq_dense_cols}')
+            logger.info(f'Sequence sparse features: {self.seq_sparse_cols}')
+            logger.info(f'Weight columns mapping: {self.weight_cols_mapping}')
+            logger.info(f'Target columns: {self.target_cols}')
 
         self.total_samples = len(df)
 
@@ -136,7 +136,7 @@ class DataFrameDataset(Dataset):
         self.convert_to_numpy(df)
 
         if verbose:
-            print(f'==> Finished dataset initialization, total samples: {self.total_samples}')
+            logger.info(f'Finished dataset initialization, total samples: {self.total_samples}')
 
     def __len__(self):
         return self.total_samples

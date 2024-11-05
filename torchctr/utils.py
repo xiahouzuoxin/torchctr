@@ -2,6 +2,23 @@ import pandas as pd
 import numpy as np
 import json
 import joblib
+import logging
+
+def get_logger(name, level=logging.INFO):
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    # Prevent duplicate handlers
+    if not logger.hasHandlers():
+        formatter = logging.Formatter(
+            '%(asctime)s %(name)s %(levelname)s - %(filename)s:%(lineno)d %(message)s'
+        )
+        ch = logging.StreamHandler()
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+    return logger
+
+logger = get_logger("torchctr")
 
 def auto_generate_feature_configs(
         df: pd.DataFrame, 

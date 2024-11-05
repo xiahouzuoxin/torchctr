@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 
 from ..dataset import DataFrameDataset
+from ..utils import logger
 
 class BaseServingModel:
     def __init__(self, model: torch.nn.Module | str, feat_configs: list[dict] | str = None):
@@ -20,7 +21,7 @@ class BaseServingModel:
         self.model.eval()
 
         if feat_configs is None:
-            print('Feature configurations not provided. Try geting the feature configurations from the model.')
+            logger.info('Feature configurations not provided. Try geting the feature configurations from the model.')
             self.feat_configs = self.model.feat_configs
         elif isinstance(feat_configs, str):
             with open(feat_configs, 'r') as f:

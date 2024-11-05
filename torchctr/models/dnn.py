@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..utils import logger
+
 # from ..embedding import DynamicEmbedding
 
 class DNN(nn.Module):
@@ -26,7 +28,7 @@ class DNN(nn.Module):
             else:
                 raise ValueError(f'Unsupported feature type: {f_config["type"]}')
 
-        print(f'==> Model Input: dense_size={num_dense}, sparse_size={num_sparse}')
+        logger.info(f'Model Input: dense_size={num_dense}, sparse_size={num_sparse}')
 
         self.tower = self.get_tower(num_sparse + num_dense, hidden_units)
 
@@ -56,7 +58,7 @@ class DNN(nn.Module):
             embedded_tensor = masked_emb.sum(dim=1)
             sparse_inputs.append(embedded_tensor)
 
-        # print(sparse_inputs[0].shape, sparse_inputs[1].shape, sparse_inputs[2].shape)
+        # logger.info(sparse_inputs[0].shape, sparse_inputs[1].shape, sparse_inputs[2].shape)
         if 'dense_features' in input_feats:
             dense_inputs = [input_feats['dense_features'], ]
         if 'seq_dense_features' in input_feats:

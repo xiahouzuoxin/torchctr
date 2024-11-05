@@ -7,6 +7,8 @@ from pydantic import BaseModel
 import uvicorn
 
 from .model_def import BaseServingModel
+from ..utils import logger
+
 # import other ServingModel classes here if needed
 
 # Add your serving models here
@@ -32,7 +34,7 @@ async def init_models():
         if isinstance(serving_class, str):
             serving_class = eval(serving_class)
         serving_models[name]['model'] = serving_class(model['path'])
-        print(f'Model {name} loaded from {model["path"]} successfully')
+        logger.info(f'Model {name} loaded from {model["path"]} successfully')
 
 @app.post('/{name}/predict')
 async def predict(name: str, req: ServeRequest):
@@ -80,11 +82,11 @@ if __name__ == '__main__':
         assert args.path is not None, 'Model path must be provided if name is specified'
 
         if args.name in serving_models:
-            print(f'Model {args.name} already exists, will be updated.')
+            logger.info(f'Model {args.name} already exists, will be updated.')
         serving_models[args.name] = {'path': args.path, 'serving_class': args.serving_class, 'dep_paths': args.dep_paths}
 
     if len(serving_models) == 0:
-        print('No serving models found. Please add serving models to `serving_models` dictionary, exiting...')
+        logger.info('No serving models found. Please add serving models to `serving_models` dictionary, exiting...')
         sys.exit(1)
 
     uvicorn.run(app, host='0.0.0.0', port=args.port)

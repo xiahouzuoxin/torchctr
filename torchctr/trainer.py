@@ -1,5 +1,4 @@
 import os
-from typing import Callable
 import numpy as np
 import json
 
@@ -7,10 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('Trainer')
-logger.setLevel(logging.INFO)
+from .utils import logger
 
 class Trainer:
     def __init__(self, model: nn.Module, 
