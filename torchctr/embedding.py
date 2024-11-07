@@ -109,13 +109,13 @@ class NaryDisEmbedding(nn.Module):
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012],
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012]]
     '''
-    def __init__(self, embedding_dim, encode_bases=[2, 3], bit_width=8, bit_width_action='error', reduction='concat'):
+    def __init__(self, embedding_dim, encode_bases=[2, 3], bit_widths=8, bit_width_action='error', reduction='concat'):
         '''
         Initialize the N-ary Discrete Embedding module.
         Args:
         - embedding_dim (int): The dimensionality of the embedding vectors.
         - encode_bases (list): List of bases for N-ary encoding (default is binary and ternary).
-        - bit_width (int): Desired length of the N-ary representation.
+        - bit_width (list | int): Desired length of the N-ary representation. Must have the same length as `encode_bases` if a list.
         - bit_width_action (str): How to handle insufficient bit width for the input values. Options are 'error', 'expand' and 'trunc'.
         - reduction (str): The reduction operation to aggregate embeddings for each base. Options are 'concat', 'mean' and 'sum'.
         '''
@@ -127,8 +127,10 @@ class NaryDisEmbedding(nn.Module):
             self.embeddings[str(base)] = nn.Embedding(base, embedding_dim)
             self.embeddings[str(base)].weight.data.normal_(mean=0, std=0.01)
 
-        self.encode_bases = encode_bases
-        self.bit_width = bit_width
+        self.encode_bases = encode_bases if isinstance(encode_bases, list) else [encode_bases]
+        self.bit_widths = bit_widths if isinstance(bit_widths, list) else [bit_widths] * len(self.encode_bases)
+        assert len(self.encode_bases) == len(self.bit_widths), "Length of `encode_bases` and `bit_widths` must be the same."
+
         self.bit_width_action = bit_width_action
         self.reduction = reduction
 
@@ -138,8 +140,8 @@ class NaryDisEmbedding(nn.Module):
         - input (torch.Tensor): Input tensor containing unsigned integer values.
         '''
         nary_embeddings = []
-        for base in self.encode_bases:
-            nary = encode_to_nary(input, base=base, bit_width=self.bit_width, bit_width_action=self.bit_width_action)
+        for base, bit_width in zip(self.encode_bases, self.bit_widths):
+            nary = encode_to_nary(input, base=base, bit_width=bit_width, bit_width_action=self.bit_width_action)
             nary_emb = self.embeddings[str(base)](nary)
             # Aggregate embeddings for each base
             nary_emb = nary_emb.sum(dim=-2)
