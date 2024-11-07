@@ -104,7 +104,7 @@ class NaryDisEmbedding(nn.Module):
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012],
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012]]
     '''
-    def __init__(self, embedding_dim, encode_bases=[2, 3], reduction='concat'):
+    def __init__(self, embedding_dim, encode_bases=[2, 3], bit_width=8, bit_width_auto_adjust=True, reduction='concat'):
         '''
         Initialize the N-ary Discrete Embedding module.
         Args:
@@ -121,6 +121,8 @@ class NaryDisEmbedding(nn.Module):
             self.embeddings[str(base)].weight.data.normal_(mean=0, std=0.01)
 
         self.encode_bases = encode_bases
+        self.bit_width = bit_width
+        self.bit_width_auto_adjust = bit_width_auto_adjust
         self.reduction = reduction
 
     def forward(self, input):
@@ -130,7 +132,7 @@ class NaryDisEmbedding(nn.Module):
         '''
         nary_embeddings = []
         for base in self.encode_bases:
-            nary = encode_to_nary(input, base=base, bit_width=8, auto_adjust=True)
+            nary = encode_to_nary(input, base=base, bit_width=self.bit_width, auto_adjust=self.bit_width_auto_adjust)
             nary_emb = self.embeddings[str(base)](nary)
             # Aggregate embeddings for each base
             nary_emb = nary_emb.sum(dim=-2)

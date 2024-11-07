@@ -275,12 +275,11 @@ class FeatureTransformer:
         Process numerical features.
         """
         hash_buckets = feat_config.get('hash_buckets', None)
-        emb_dim = feat_config.get('emb_dim', None)
-        discretization = True if (hash_buckets or emb_dim) else False
-        normalize = feat_config.get('norm', None)
+        discretization = feat_config.get('discretization', None) or feat_config.get('discret', None)
+        normalize = feat_config.get('norm', None) or feat_config.get('normalize', None)
         if normalize:
             assert normalize in ['std', '[0,1]'], f'Unsupported norm: {normalize}'
-        assert not (discretization and normalize), f'hash_buckets/emb_dim and norm cannot be set at the same time: {feat_config}'
+        assert not (discretization and normalize), f'discretization and norm cannot be set at the same time: {feat_config}'
 
         if is_train:
             # update mean, std, min, max
@@ -454,12 +453,11 @@ class FeatureTransformerPolars(FeatureTransformer):
         Process numerical features.
         """
         hash_buckets = feat_config.get('hash_buckets', None)
-        emb_dim = feat_config.get('emb_dim', None)
-        discretization = True if (hash_buckets or emb_dim) else False
-        normalize = feat_config.get('norm', None)
+        discretization = feat_config.get('discretization', None) or feat_config.get('discret', None)
+        normalize = feat_config.get('norm', None) or feat_config.get('normalize', None)
         if normalize:
             assert normalize in ['std', '[0,1]'], f'Unsupported norm: {normalize}'
-        assert not (discretization and normalize), f'hash_buckets/emb_dim and norm cannot be set at the same time: {feat_config}'
+        assert not (discretization and normalize), f'discretization and norm cannot be set at the same time: {feat_config}'
 
         if is_train:
             # update mean, std, min, max
