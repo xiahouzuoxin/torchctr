@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import math
+from .utils import logger
 
-def encode_to_nary(input: torch.Tensor, base: int = 2, bit_width: int = 8, auto_adjust: bool = True) -> torch.Tensor:
+def encode_to_nary(input: torch.Tensor, base: int = 2, bit_width: int = 8, bit_width_action: str = 'error') -> torch.Tensor:
     """
     Convert each element in the input tensor to its N-ary (e.g., binary, ternary) representation.
     
@@ -11,7 +12,7 @@ def encode_to_nary(input: torch.Tensor, base: int = 2, bit_width: int = 8, auto_
     - input (torch.Tensor): Input tensor containing unsigned integer values.
     - base (int): The base of the encoding (default is 2 for binary).
     - bit_width (int): Desired length of the output representation.
-    - auto_adjust (bool): Automatically adjust `bit_width` if insufficient (default is True).
+    - bit_width_action (str): How to handle insufficient bit width for the input values. Options are 'error', 'expand' and 'trunc'.
     
     Returns:
     - torch.Tensor: A tensor where each element is represented as a `bit_width`-length vector of digits in base `N`.
@@ -33,12 +34,16 @@ def encode_to_nary(input: torch.Tensor, base: int = 2, bit_width: int = 8, auto_
     
     # Adjust bit width if necessary
     if min_required_bits > bit_width:
-        if auto_adjust:
+        warn_msg = f"bit_width={bit_width} is insufficient to represent values in base-{base}. Minimum required bit width is {min_required_bits}."
+        logger.warning(warn_msg)
+        if bit_width_action == 'expand':
             bit_width = min_required_bits
-            print(f"Warning: bit_width adjusted to {bit_width} to represent all values.")
+            logger.warning(f"Expanding bit width to {bit_width}.")
+        elif bit_width_action == 'trunc':
+            logger.warning(f"Truncating values to fit within bit width.")
+            input = torch.remainder(input, base**bit_width)
         else:
-            raise ValueError(f"bit_width={bit_width} is insufficient to represent values in base-{base}. "
-                             f"Minimum required bit width is {min_required_bits}.")
+            raise ValueError(warn_msg + " Set `bit_width_action` to 'expand' or 'trunc' to handle this case.")
     
     # Initialize an empty list to collect digits
     nary_digits = []
@@ -104,12 +109,14 @@ class NaryDisEmbedding(nn.Module):
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012],
      [ 0.0012, -0.0034,  0.0023, -0.0012,  0.0012, -0.0034,  0.0023, -0.0012]]
     '''
-    def __init__(self, embedding_dim, encode_bases=[2, 3], bit_width=8, bit_width_auto_adjust=True, reduction='concat'):
+    def __init__(self, embedding_dim, encode_bases=[2, 3], bit_width=8, bit_width_action='error', reduction='concat'):
         '''
         Initialize the N-ary Discrete Embedding module.
         Args:
         - embedding_dim (int): The dimensionality of the embedding vectors.
         - encode_bases (list): List of bases for N-ary encoding (default is binary and ternary).
+        - bit_width (int): Desired length of the N-ary representation.
+        - bit_width_action (str): How to handle insufficient bit width for the input values. Options are 'error', 'expand' and 'trunc'.
         - reduction (str): The reduction operation to aggregate embeddings for each base. Options are 'concat', 'mean' and 'sum'.
         '''
         super(NaryDisEmbedding, self).__init__()
@@ -122,7 +129,7 @@ class NaryDisEmbedding(nn.Module):
 
         self.encode_bases = encode_bases
         self.bit_width = bit_width
-        self.bit_width_auto_adjust = bit_width_auto_adjust
+        self.bit_width_action = bit_width_action
         self.reduction = reduction
 
     def forward(self, input):
@@ -132,7 +139,7 @@ class NaryDisEmbedding(nn.Module):
         '''
         nary_embeddings = []
         for base in self.encode_bases:
-            nary = encode_to_nary(input, base=base, bit_width=self.bit_width, auto_adjust=self.bit_width_auto_adjust)
+            nary = encode_to_nary(input, base=base, bit_width=self.bit_width, bit_width_action=self.bit_width_action)
             nary_emb = self.embeddings[str(base)](nary)
             # Aggregate embeddings for each base
             nary_emb = nary_emb.sum(dim=-2)
