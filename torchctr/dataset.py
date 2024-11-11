@@ -11,6 +11,9 @@ pd.options.mode.chained_assignment = None  # default='warn'
 pd.options.display.max_rows = 999
 pd.options.display.max_columns = 100
 
+# Tips: 
+# DataFrameDataset is designed for var-length supported dataset, which is suitable for sequence data.
+# Another option is to use huggingface's datasets library, which is more powerful and efficient for large-scale datasets.
 class DataFrameDataset(Dataset):
     '''
     Var-length supported pytorch dataset for DataFrame.

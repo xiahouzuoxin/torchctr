@@ -22,7 +22,6 @@ class FeatureTransformer:
                  list_padding_maxlen=None,
                  outliers_category=[], 
                  outliers_numerical=[], 
-                 update_configs=False,
                  verbose=False):
         """
         Feature transforming for both train and test dataset.
@@ -43,9 +42,8 @@ class FeatureTransformer:
             outliers_numerical: list, outliers for numerical features
             verbose: bool, whether to print the processing details
             n_jobs: int, number of parallel jobs
-            update_configs: bool, whether to update the feat_configs when is_train=True or copy a new feat_configs object to avoid in-place modification
         """
-        self.feat_configs = feat_configs if update_configs else deepcopy(feat_configs)
+        self.feat_configs = deepcopy(feat_configs)
         self.category_force_hash = category_force_hash
         self.category_dynamic_vocab = category_dynamic_vocab
         self.category_min_freq = category_min_freq

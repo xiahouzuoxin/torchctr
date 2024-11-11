@@ -1,7 +1,10 @@
+import os
+from functools import wraps
+import pickle
+import hashlib
 import pandas as pd
 import numpy as np
 import json
-import joblib
 import logging
 
 def get_logger(name, level=logging.INFO):
@@ -114,23 +117,29 @@ def jsonify(obj):
         raise TypeError(repr(obj) + " is not JSON serializable")
     return json.loads(json.dumps(obj, default=encoder))
 
-def persist_to_file(file_path):
-    '''persist obj to file by joblib
-    return: decorated function
-    '''
+def disk_cache(cache_dir='.cache'):
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    
     def decorator(func):
-        try:
-            cache = joblib.load(file_path)
-        except (IOError, FileNotFoundError, ValueError, EOFError):
-            cache = None
-
+        @wraps(func)
         def wrapper(*args, **kwargs):
-            if cache is not None:
-                return cache
+            # Create a unique cache key based on the function name and arguments
+            cache_key = hashlib.md5(pickle.dumps((func.__name__, args, kwargs))).hexdigest()
+            cache_path = os.path.join(cache_dir, f"{cache_key}.pkl")
+            
+            # Check if the result is already cached on disk
+            if os.path.exists(cache_path):
+                with open(cache_path, 'rb') as f:
+                    return pickle.load(f)
+            
+            # Compute the result and save it to disk
             result = func(*args, **kwargs)
-            joblib.dump(result, file_path)
+            with open(cache_path, 'wb') as f:
+                pickle.dump(result, f)
+            
             return result
         
         return wrapper
-
+    
     return decorator

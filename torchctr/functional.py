@@ -1,6 +1,47 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
+
+def pad_sequences_to_maxlen(sequences, batch_first=False, padding_value=0.0, padding_side='right', max_length=None):
+    """
+    Pads a list of 1D tensors to the max length of the longest sequence.
+    
+    Args:
+        sequences (list of torch.Tensor): List of 1D tensors with varying lengths.
+        batch_first (bool, optional): Whether the output tensor has batch dimension in front. Default is False.
+        padding_value (float, optional): The value to use for padding. Default is 0.0.
+        padding_side (str, optional): The side to pad on. Default is 'right'.
+    
+    Returns:
+        torch.Tensor: A tensor of shape [batch_size, max_length] with the sequences padded.
+    """
+    # Pad sequences to the length of the longest sequence in the batch
+    padded_sequences = pad_sequence(sequences, batch_first=batch_first, padding_value=padding_value)
+
+    if max_length is None:
+        return padded_sequences
+    
+    # Adjust to max_length
+    if padded_sequences.size(1) < max_length:
+        # Pad further if necessary
+        padding_size = max_length - padded_sequences.size(1)
+        if padding_side == 'left':
+            padded_sequences = torch.nn.functional.pad(
+                padded_sequences, (padding_size, 0), mode='constant', value=padding_value
+            )
+        else:
+            padded_sequences = torch.nn.functional.pad(
+                padded_sequences, (0, padding_size), mode='constant', value=padding_value
+            )
+    elif padded_sequences.size(1) > max_length:
+        # Truncate if necessary
+        if padding_side == 'left':
+            padded_sequences = padded_sequences[:, -max_length:]
+        else:
+            padded_sequences = padded_sequences[:, :max_length]
+    
+    return padded_sequences
 
 def target_attention(target_emb, candidate_embs, mask=None):
     """
