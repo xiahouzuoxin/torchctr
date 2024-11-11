@@ -5,7 +5,7 @@ import torch
 import torch.utils
 from torch.utils.data import Dataset
 from .utils import pad_list, logger
-from .transformer import FeatureTransformer, FeatureTransformerPolars
+from .transformer import FeatureTransformer
 
 pd.options.mode.chained_assignment = None  # default='warn'
 pd.options.display.max_rows = 999
@@ -64,13 +64,8 @@ class DataFrameDataset(Dataset):
         if is_raw:
             assert 'is_train' in kwargs, 'is_train parameter should be provided when is_raw=True'
             is_train = kwargs['is_train']
-
-            if isinstance(df, pd.DataFrame):
-                feat_transformer = FeatureTransformer
-            elif isinstance(df, pl.DataFrame):
-                feat_transformer = FeatureTransformerPolars
             
-            self.transformer = feat_transformer(
+            self.transformer = FeatureTransformer(
                 feat_configs,
                 category_force_hash=kwargs.get('category_force_hash', False),
                 category_upper_lower_sensitive=kwargs.get('category_upper_lower_sensitive', True),
@@ -82,7 +77,7 @@ class DataFrameDataset(Dataset):
                 verbose=verbose
             )
             
-            df = self.transformer.transform(df, is_train=is_train, n_jobs=n_jobs)
+            df = self.transformer.fit_transform(df, is_train=is_train, n_jobs=n_jobs)
             feat_configs = self.transformer.get_feat_configs()
             if verbose:
                 logger.info(f'Feature transforming (is_train={is_train}) done...')
