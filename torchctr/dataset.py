@@ -5,7 +5,7 @@ import torch
 import torch.utils
 from torch.utils.data import Dataset
 from datasets import load_dataset
-from .functional import pad_sequences_to_maxlen
+from .nn.functional import pad_sequences_to_maxlen
 from .utils import pad_list, logger
 from .transformer import FeatureTransformer
 

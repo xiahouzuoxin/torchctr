@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import math
-from .utils import logger
+from ..utils import logger
 
 def encode_to_nary(input: torch.Tensor, base: int = 2, bit_width: int = 8, bit_width_action: str = 'error') -> torch.Tensor:
     """
