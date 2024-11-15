@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import json
 import logging
+from sklearn.utils import murmurhash3_32
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
 
 def get_logger(name, level=logging.INFO):
@@ -86,6 +87,17 @@ def auto_generate_feature_configs(
         feat_configs.append(col_info)
     
     return feat_configs
+
+def hash_bucket(v, buckets, method='murmurhash3'):
+    """
+    Hash function to map a value to a hash bucket
+    """
+    # hash_object = hashlib.sha256(str(v).encode())
+    # hash_digest = hash_object.hexdigest()
+    # hash_integer = int(hash_digest, 16)
+
+    hash_integer = murmurhash3_32(str(v), seed=42, positive=True)
+    return hash_integer % buckets
 
 def pad_list(arr_list, padding_value, max_len=None):
     '''

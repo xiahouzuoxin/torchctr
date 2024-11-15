@@ -15,6 +15,7 @@ class Trainer:
                  max_epochs=1, 
                  early_stopping_rounds=None, 
                  save_ckpt_path=None,
+                 save_ckpt_steps='epoch',
                  ckpt_file_prefix='checkpoint',
                  logger=logger,
                  training_step_func = None,
@@ -30,6 +31,8 @@ class Trainer:
             max_epochs (int, optional): The max number of training epochs. Defaults to 1.
             early_stopping_rounds (int, optional): The number of rounds to wait for early stopping. Defaults to None.
             save_ckpt_path (str, optional): The path to save the checkpoint files. Defaults to None.
+            save_ckpt_steps (str, optional): The steps to save the checkpoint files. Can be 'epoch' or int value. Defaults to 'epoch'.
+            ckpt_file_prefix (str, optional): The prefix of the checkpoint file name. Defaults to 'checkpoint'.
             logger ([type], optional): The logger object. Defaults to logger.
             training_step_func (batch, batch_idx): The training step function. Defaults to use the model's `training_step` method.
             validation_step_func (batch, batch_idx): The validation step function. Defaults to use the model's `validation_step` method.
@@ -57,6 +60,10 @@ class Trainer:
             os.makedirs(self.save_ckpt_path, exist_ok=True)
 
             self.metadata_fn = f'{self.save_ckpt_path}/metadata.json'
+
+        self.save_ckpt_steps = save_ckpt_steps
+        if isinstance(self.save_ckpt_steps, int):
+            assert self.save_ckpt_steps > 0, 'save_ckpt_steps should be greater than 0.'
 
         self.max_epochs = max_epochs
         self.early_stopping_rounds = early_stopping_rounds
@@ -160,6 +167,11 @@ class Trainer:
                 if self.lr_scheduler:
                     self.lr_scheduler.step()
                 self.global_steps += 1
+
+                if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
+                    self.save_ckpt(self.ckpt_file_prefix, 
+                                   local_steps=k+len(train_dataloader)*self.num_epoch-1, 
+                                   eval_loss=None, train_loss=train_loss)
                 
                 if k % 100 == 0:
                     avg_loss = {n: v/k for n, v in train_loss.items()} if k > 0 else train_loss
@@ -171,7 +183,8 @@ class Trainer:
             eval_loss = self.evaluate_model(self.model, eval_dataloader)
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
 
-            self.save_ckpt(self.ckpt_file_prefix, local_steps=(self.num_epoch-1)*len(train_dataloader)+k, eval_loss=eval_loss)
+            if self.save_ckpt_steps == 'epoch':
+                self.save_ckpt(self.ckpt_file_prefix, local_steps=self.num_epoch*len(train_dataloader), eval_loss=eval_loss)
 
             if self.early_stopping_rounds:
                 if len(eval_losses) >= self.early_stopping_rounds:
