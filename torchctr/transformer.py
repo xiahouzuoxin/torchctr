@@ -8,7 +8,7 @@ from .utils import hash_bucket as hash_bucket_fn
 
 class FeatureTransformer:
     def __init__(self, 
-                 feat_configs, 
+                 feat_configs=None, 
                  category_min_freq=None,
                  category_upper_lower_sensitive=True,
                  list_padding_value=None,
@@ -26,6 +26,7 @@ class FeatureTransformer:
                     {'name': 'b', 'dtype': 'category', 'emb_dim': 8, 'hash_buckets': 100}, # category feature with hash_buckets
                     {'name': 'c', 'dtype': 'category', 'islist': True, 'emb_dim': 8, 'maxlen': 256}, # sequence feature, if maxlen is set, it will truncate the sequence to the maximum length
                 ]
+                If feat_configs is None or list of column names, it will be auto-generated based on the input DataFrame when calling fit() or fit_transform().
             is_train: bool, whether it's training dataset
             category_min_freq: int, minimum frequency for category features, only effective when is_train=True
             outliers_category: list, outliers for category features
@@ -42,7 +43,104 @@ class FeatureTransformer:
         self.list_padding_maxlen = list_padding_maxlen
         self.verbose = verbose
 
-        assert all([f['dtype'] in ['category', 'numerical'] for f in self.feat_configs]), 'Only support category and numerical features'
+    @staticmethod
+    def autogen_init_feat_configs(df: pl.DataFrame, 
+                                  columns: list = None, 
+                                  min_emb_dim: int = 6, 
+                                  max_emb_dim: int = 32,
+                                  max_hash_buckets: int = 1000000, 
+                                  seq_max_len: int = 256):
+        """
+        Automatically generate init feature configurations based on the input DataFrame.
+        """
+        feat_configs = []
+        if columns is None:
+            columns = df.columns
+        dtypes = df.select(columns).dtypes
+
+        for col, dtype in zip(columns, dtypes):
+            col_info = {"name": col}
+            
+            # Check if column contains sequences (lists)
+            if dtype == pl.List:
+                col_info["dtype"] = "category"
+                col_info["islist"] = True
+                stats = df.select(
+                    nunique = pl.col(col).explode().n_unique(),
+                    maxlen = pl.col(col).list.len().max()
+                ).to_dicts()[0]
+                num_unique = stats['nunique']
+                max_len = stats['maxlen']
+                col_info["max_len"] = min(max_len, seq_max_len)
+            # elif pd.api.types.is_numeric_dtype(df[col]):
+            elif dtype.is_numeric():
+                col_info["dtype"] = "numerical"
+                col_info["norm"] = "std"  # Standard normalization
+                stats = df.select(mean=pl.col(col).mean(), std=pl.col(col).std()).to_dicts()[0]
+                col_info.update(stats)
+                feat_configs.append(col_info)
+                continue
+            elif dtype == pl.Utf8 or dtype == pl.Categorical:
+                col_info["dtype"] = "category"
+                num_unique = df.select(pl.col(col).n_unique()).item()
+            else:
+                continue
+            
+            if col_info["dtype"] == "category":
+                # Calculate embedding dimension
+                # emb_dim = int(np.sqrt(num_unique))
+                emb_dim = int(np.log2(num_unique))
+                emb_dim = min(max(emb_dim, min_emb_dim), max_emb_dim)  # Example bounds
+                col_info["emb_dim"] = emb_dim
+
+                # Use hash bucket for high cardinality categorical features or unique values is high
+                if num_unique > 0.2 * len(df) or num_unique > max_hash_buckets:
+                    # Use hash bucket for high cardinality categorical features
+                    col_info["hash_buckets"] = min(num_unique, max_hash_buckets)
+                
+                col_info["min_freq"] = 3  # Example minimum frequency
+            
+            # Add the column info to feature configs
+            feat_configs.append(col_info)
+
+        logger.info(f'Auto-generated feature configurations: {feat_configs}')
+
+        return feat_configs
+
+    @staticmethod
+    def split(df: pl.DataFrame, group_col: str = None, test_size: float = 0.2, shuffle: bool = True, random_state: int = 3407):
+        """
+        Split the dataset into train and test datasets.
+        
+        Args:
+            df (pl.DataFrame): The input DataFrame to split.
+            group_col (str, optional): Column name for group-based splitting. Default is None.
+            test_size (float, optional): Proportion of the dataset to include in the test split. Default is 0.2.
+            shuffle (bool, optional): Whether to shuffle the data before splitting. Default is True.
+            random_state (int, optional): Random seed for reproducibility. Default is 3407.
+        
+        Returns:
+            (pl.DataFrame, pl.DataFrame): Train and test DataFrames.
+        """
+        if group_col:
+            groups = df.select(pl.col(group_col)).unique().to_numpy().flatten()
+            if shuffle:
+                np.random.seed(random_state)
+                np.random.shuffle(groups)
+            split_idx = int(len(groups) * (1 - test_size))
+            train_groups, test_groups = groups[:split_idx], groups[split_idx:]
+
+            train_df = df.filter(pl.col(group_col).is_in(train_groups))
+            test_df = df.filter(pl.col(group_col).is_in(test_groups))
+        else:
+            if shuffle:
+                df = df.sample(fraction=1.0, shuffle=True, with_replacement=False, seed=random_state)
+            split_idx = int(df.height * (1 - test_size))
+            
+            train_df = df.slice(0, split_idx)
+            test_df = df.slice(split_idx, None)
+
+        return train_df, test_df
 
     def _add_index(self, df: pl.DataFrame):
         if '_index' not in df.columns:
@@ -50,6 +148,20 @@ class FeatureTransformer:
                 pl.arange(0, df.height).alias("_index")  # add index column for convenience
             )
         return df
+    
+    def _init_feat_configs(self, df: pl.DataFrame):
+        if self.feat_configs is None:
+            logger.warning('Feature configurations are not provided, auto-generating feature configurations...')
+            feat_configs = self.autogen_init_feat_configs(df)
+        elif all([isinstance(f, str) for f in self.feat_configs]):
+            # input is a list of column names
+            logger.warning('Feature configurations only contain column names, auto-generating feature configurations...')
+            feat_configs = self.autogen_init_feat_configs(df.select(self.feat_configs))
+        else:
+            feat_configs = self.feat_configs
+
+        assert all([f['dtype'] in ['category', 'numerical'] for f in feat_configs]), 'Only support category and numerical features'
+        return feat_configs 
 
     def fit(self, df: pl.DataFrame):
         """
@@ -67,6 +179,7 @@ class FeatureTransformer:
         Returns:
             self: FeatureTransformer
         """
+        self.feat_configs = self._init_feat_configs(df)
         self.df = self._add_index(df)
 
         # Run the feature fitting in parallel, will update the feat_configs in place
@@ -110,6 +223,7 @@ class FeatureTransformer:
         Returns:
             df: pl.DataFrame, transformed dataset
         """
+        self.feat_configs = self._init_feat_configs(df)
         self.df = self._add_index(df)
 
         # Run the feature fitting in parallel, will update the feat_configs in place
