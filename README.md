@@ -8,13 +8,13 @@ This directory aims to train a Click-Through Rate (CTR) model using PyTorch. It'
 > 1. Apply polars instead of pandas to process data. I first implemented the pandas version of FeatureTransformer, but it's very slow when datasize> 20 millon.
 > 2. Apply parquets instead of pickle files to save data samples. It's really saved my memory.
 
-## Supported features:
+## Features:
 
-* Both numerical and categorical input features
-  * Categorical: automatic vocabulary extraction, low-frequency filtering, dynamic embedding, hash embedding
-  * Numerical: standard or 0-1 normalization, automatic discretization, automatic update of statistical number for standard or 0-1 normalization if new data is fed in
-* Variable-length sequence feature support, if there's order in the sequence, please put the latest data before the oldest data as it may pads at the end of the sequence
-* Sequence features support weights by setting the weight column
+* Fast [FeatureTransformer](./torchctr/transformer.py) for DNN (tested on >100millon rows on single machine). Which support:
+  - Both numerical and categorical input features
+    - Categorical: automatic vocabulary extraction, low-frequency filtering, dynamic embedding, hash embedding
+    - Numerical: standard/0-1 normalization, automatic discretization, automatic update of statistical number for standard/0-1 normalization when multiple times of fitting.
+  - Variable-length sequence feature support, if there's order in the sequence, please put the latest data before the oldest data as it may pads at the end of the sequence
 * Implemented a common [Trainer](./torchctr/trainer.py) for training pytorch models, and save/load the results
 * Basic FastAPI for [Model API Serving](./torchctr/serving/serve.py)
 

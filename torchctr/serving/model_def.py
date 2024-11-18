@@ -1,10 +1,10 @@
 import json
-import numpy as np
-import pandas as pd
 import torch
-
-from ..dataset import DataFrameDataset
-from ..utils import logger
+import pandas as pd
+import polars as pl
+from torchctr.nn.functional import pad_sequences_to_maxlen
+from torchctr.transformer import FeatureTransformer
+from torchctr.utils import logger
 
 class BaseServingModel:
     def __init__(self, model: torch.nn.Module | str, feat_configs: list[dict] | str = None):
@@ -29,17 +29,47 @@ class BaseServingModel:
         else:
             self.feat_configs = feat_configs
 
-        self.ds_generator = DataFrameDataset
+        self.ft = FeatureTransformer(self.feat_configs)
 
-    def predict(self, df):
+    def predict(self, input):
         '''
-        Re-implement this method if needed to predict the output of the model.
+        Re-implement this method.
         '''
-        ds = self.ds_generator(df, self.feat_configs, target_cols=None, is_raw=True, is_train=False, n_jobs=1)
-        loader = torch.utils.data.DataLoader(ds, batch_size=len(df), shuffle=False, collate_fn=ds.collate_fn)
-        preds = []
-        for batch in loader:
-            pred = self.model(batch)
-            preds.append(pred.detach().cpu().numpy())
-        preds = np.concatenate(preds, axis=0)
-        return {'prediction': preds.tolist()}
+
+        if isinstance(input, pd.DataFrame):
+            input = pl.from_pandas(input)
+        df = self.ft.transform(input)
+
+        # convert to torch tensor
+        dense_cols = [f['name'] for f in self.feat_configs if f['type'] == 'dense']
+        dense_features = torch.tensor(df.select(pl.col(dense_cols)).to_numpy(), dtype=torch.float32)
+
+        features = {
+            'dense_features': dense_features
+        }
+        for k in self.feat_configs:
+            if k['type'] != 'sparse':
+                continue
+
+            if k.get('islist'):
+                # convert to list of torch tensor
+                sparse_feat = [torch.tensor(v, dtype=torch.long) for v in df.select(pl.col(k['name'])).to_series().to_numpy()]
+                # pad sequences
+                sparse_feat = pad_sequences_to_maxlen(sparse_feat, batch_first=True, padding_value=-100, max_length=5)
+            else:
+                sparse_feat = torch.tensor(df.select(pl.col(k['name'])).to_numpy(), dtype=torch.long)
+
+            features[k['name']] = sparse_feat
+
+        # predict
+        with torch.no_grad():
+            output = self.model(features)
+
+        if isinstance(output, tuple):
+            output = [o.detach().cpu().numpy() for o in output]
+        else:
+            output = output.detach().cpu().numpy()
+
+        return output.tolist()
+        
+
