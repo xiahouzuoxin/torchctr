@@ -108,7 +108,7 @@ class Trainer:
             train_dataloader: torch.utils.data.DataLoader,
             eval_dataloader: torch.utils.data.DataLoader = None,
             init_ckpt_path: str = None, 
-            init_ckpt_exclude_keys: list = None,
+            init_ckpt_exclude_keys: list | str = None,
             ret_model='final'):
         """
         Trains the model using the provided training dataloader and evaluates it using the optional evaluation dataloader.
@@ -117,7 +117,7 @@ class Trainer:
             train_dataloader (torch.utils.data.DataLoader): The dataloader for training the model.
             eval_dataloader (torch.utils.data.DataLoader, optional): The dataloader for evaluating the model. Defaults to None.
             init_ckpt_path (str, optional): The path to the initial checkpoint path or the file name. Defaults to None.
-            init_ckpt_exclude_keys (list, optional): The keys to exclude from the initial checkpoint file. Defaults to None.
+            init_ckpt_exclude_keys (list, optional): The keys to exclude from the initial checkpoint file. Defaults to None. If 'all_except_model', only model state_dict will loaded.
             ret_model (str, optional): The type of model to return. Can be 'final' or 'best'. Defaults to 'final'.
 
         Returns:
@@ -294,7 +294,10 @@ class Trainer:
         
         ckpt = torch.load(ckpt_file)
 
-        exclude_keys = set([]) if exclude_keys is None else set(exclude_keys) 
+        if exclude_keys == 'all_except_model':
+            exclude_keys = set(ckpt.keys()) - set(['model',])
+        else:
+            exclude_keys = set([]) if exclude_keys is None else set(exclude_keys) 
         
         # load all the serializable attributes in the checkpoint file
         for k, v in ckpt.items():
