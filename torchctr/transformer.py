@@ -1,5 +1,6 @@
 from copy import deepcopy
 import itertools
+import json
 import numpy as np
 import polars as pl
 from .utils import jsonify, logger
@@ -9,7 +10,7 @@ class FeatureTransformer:
     def __init__(self, 
                  feat_configs=None, 
                  category_min_freq=None,
-                 category_upper_lower_sensitive=True,
+                 category_case_sensitive=True,
                  list_padding_value=None,
                  list_padding_maxlen=None,
                  outliers_category=[], 
@@ -26,8 +27,7 @@ class FeatureTransformer:
                     {'name': 'c', 'dtype': 'category', 'islist': True, 'emb_dim': 8, 'maxlen': 256}, # sequence feature, if maxlen is set, it will truncate the sequence to the maximum length
                 ]
                 If feat_configs is None or list of column names, it will be auto-generated based on the input DataFrame when calling fit() or fit_transform().
-            is_train: bool, whether it's training dataset
-            category_min_freq: int, minimum frequency for category features, only effective when is_train=True
+            category_min_freq: int, minimum frequency for category features, only effective when fitting
             outliers_category: list, outliers for category features
             outliers_numerical: list, outliers for numerical features
             verbose: bool, whether to print the processing details
@@ -37,7 +37,7 @@ class FeatureTransformer:
         self.category_min_freq = category_min_freq
         self.outliers_category = outliers_category
         self.outliers_numerical = outliers_numerical
-        self.category_upper_lower_sensitive = category_upper_lower_sensitive
+        self.category_case_sensitive = category_case_sensitive
         self.list_padding_value = list_padding_value
         self.list_padding_maxlen = list_padding_maxlen
         self.verbose = verbose
@@ -141,11 +141,19 @@ class FeatureTransformer:
 
         return train_df, test_df
 
-    def _add_index(self, df: pl.DataFrame):
+    def _init_context(self, df: pl.DataFrame):
         if '_index' not in df.columns:
             df = df.with_columns(
                 pl.arange(0, df.height).alias("_index")  # add index column for convenience
             )
+
+        cross_feats = [f for f in self.feat_configs if f.get('cross', None)]
+        if len(cross_feats) > 0:
+            df = df.with_columns([
+                self.pre_cross_features(f).alias(f['name'])
+                for f in cross_feats
+            ])            
+        
         return df
     
     def _init_feat_configs(self, df: pl.DataFrame):
@@ -179,7 +187,7 @@ class FeatureTransformer:
             self: FeatureTransformer
         """
         self.feat_configs = self._init_feat_configs(df)
-        self.df = self._add_index(df)
+        self.df = self._init_context(df)
 
         # Run the feature fitting in parallel, will update the feat_configs in place
         self.df.select([
@@ -208,7 +216,7 @@ class FeatureTransformer:
         Returns:
             df: pl.DataFrame, transformed dataset
         """
-        self.df = self._add_index(df)
+        self.df = self._init_context(df)
 
         # Run the feature fitting in parallel, will update the feat_configs in place
         df = self.df.with_columns([
@@ -237,7 +245,7 @@ class FeatureTransformer:
             df: pl.DataFrame, transformed dataset
         """
         self.feat_configs = self._init_feat_configs(df)
-        self.df = self._add_index(df)
+        self.df = self._init_context(df)
 
         # Run the feature fitting in parallel, will update the feat_configs in place
         df = self.df.with_columns([
@@ -280,7 +288,7 @@ class FeatureTransformer:
 
         return ret
 
-    def _process_category(self, s, oov: str, outliers = None, upper_lower_sensitive = True):
+    def _process_category(self, s, oov: str, outliers = None, case_sensitive = True):
         ''' Convert a series to a string series, with float/integer values considered.
         '''
         # Attempt to convert strings to integers
@@ -296,7 +304,7 @@ class FeatureTransformer:
             .otherwise(s)  # Ensure None values are replaced with "0"
         )
 
-        if not upper_lower_sensitive:
+        if not case_sensitive:
             s = s.str.to_lowercase()
 
         if outliers is not None and len(outliers) > 0:
@@ -304,7 +312,7 @@ class FeatureTransformer:
                 outliers = {v: oov for v in outliers}
             if not isinstance(outliers, dict):
                 raise ValueError("Outliers must be a list or a dictionary")
-            if not upper_lower_sensitive:
+            if not case_sensitive:
                 outliers = {k.lower(): v for k, v in outliers.items()}
 
             s = s.replace(outliers)
@@ -320,13 +328,13 @@ class FeatureTransformer:
         name = feat_config['name']
         oov = feat_config.get('oov', 'other')  # out of vocabulary
         outliers_category = feat_config.get('outliers', self.outliers_category)
-        category_upper_lower_sensitive = feat_config.get('upper_lower_sensitive', self.category_upper_lower_sensitive)
+        category_case_sensitive = feat_config.get('case_sensitive', self.category_case_sensitive)
 
-        s = self._process_category(s, oov, outliers=outliers_category, upper_lower_sensitive=category_upper_lower_sensitive)
+        s = self._process_category(s, oov, outliers=outliers_category, case_sensitive=category_case_sensitive)
 
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse'
-            feat_config['upper_lower_sensitive'] = category_upper_lower_sensitive
+            feat_config['case_sensitive'] = category_case_sensitive
             feat_config['oov'] = oov
             hash_buckets = feat_config.get('hash_buckets', None)
             if hash_buckets:
@@ -494,7 +502,6 @@ class FeatureTransformer:
     def process_list(self, feat_config, s: pl.Expr, mode: str = 'transform'):
         """
         Process list features.
-        TODO: low frequency filtering of crossed features
         """
         name = feat_config['name']
 
@@ -542,6 +549,31 @@ class FeatureTransformer:
             s = df.select(pl.col('original').list.concat(pl.col('pad_list'))).to_series()
         
         return s
+    
+    def pre_cross_features(self, feat_config):
+        name = feat_config['name']
+        cross = feat_config.get('cross', [])
+        assert isinstance(cross, list) and len(cross) > 1, f'cross features: {cross} should be a list with length > 1'
+        if self.verbose:
+            logger.info(f'Pre-crossing features {cross} for {name}...')
+        
+        cross_feat_configs = []
+        for c in cross:
+            find = False
+            for f in self.feat_configs:
+                if f['name'] == c:
+                    cross_feat_configs.append(f)
+                    find = True
+                    break
+            assert find, f'cross feature {c} not found'
+
+        cross_features = [
+            self._process_category(
+                pl.col(f['name']), f.get('oov', 'other'), f.get('outliers', []), f.get('case_sensitive', True)
+            ) for f in cross_feat_configs
+        ]
+        s = pl.concat_str(cross_features, separator='_').alias(name)
+        return s
 
     def post_cross_features(self, feat_config, mode: str = 'transform'):
         """
@@ -587,3 +619,16 @@ class FeatureTransformer:
     
     def get_feat_configs(self):
         return self.feat_configs
+    
+    def save(self, path):
+        if not path.endswith('.json'):
+            path = path + '.json'
+        with open(path, 'w') as wf:
+            json.dump(self.feat_configs, wf)
+        return path
+
+    @classmethod
+    def load(cls, path):
+        with open(path, 'r') as rf:
+            feat_configs = json.load(rf)
+        return cls(feat_configs=feat_configs)
