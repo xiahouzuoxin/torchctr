@@ -1,4 +1,5 @@
 from copy import deepcopy
+import itertools
 import numpy as np
 import polars as pl
 from .utils import jsonify, logger
@@ -183,8 +184,15 @@ class FeatureTransformer:
         # Run the feature fitting in parallel, will update the feat_configs in place
         self.df.select([
             self.process_one(pl.col(f['name']), f, mode='fit').alias(f['name']+'_fit')
-            for f in self.feat_configs
+            for f in self.feat_configs if not f.get('post_cross', None)
         ])
+
+        post_cross_feats = [f for f in self.feat_configs if f.get('post_cross', None)]
+        if post_cross_feats:
+            self.df.select([
+                self.post_cross_features(f, mode='fit') 
+                for f in post_cross_feats
+            ])
 
         self.feat_configs = jsonify(self.feat_configs) # make sure it's serializable
         self.df = None
@@ -205,8 +213,15 @@ class FeatureTransformer:
         # Run the feature fitting in parallel, will update the feat_configs in place
         df = self.df.with_columns([
             self.process_one(pl.col(f['name']), f, mode='transform').alias(f['name'])
-            for f in self.feat_configs
+            for f in self.feat_configs if not f.get('post_cross', None)
         ])
+
+        post_cross_feats = [f for f in self.feat_configs if f.get('post_cross', None)]
+        if post_cross_feats:
+            df = df.with_columns([
+                self.post_cross_features(f, mode='transform').alias(f['name'])
+                for f in post_cross_feats
+            ])
 
         self.df = None # release the memory
         
@@ -227,8 +242,15 @@ class FeatureTransformer:
         # Run the feature fitting in parallel, will update the feat_configs in place
         df = self.df.with_columns([
             self.process_one(pl.col(f['name']), f, mode='fit_transform').alias(f['name'])
-            for f in self.feat_configs
+            for f in self.feat_configs if not f.get('post_cross', None)
         ])
+
+        post_cross_feats = [f for f in self.feat_configs if f.get('post_cross', None)]
+        if post_cross_feats:
+            df = df.with_columns([
+                self.post_cross_features(f, mode='fit_transform').alias(f['name'])
+                for f in post_cross_feats
+            ])
 
         self.feat_configs = jsonify(self.feat_configs) # make sure it's serializable
 
@@ -354,7 +376,7 @@ class FeatureTransformer:
                         feat_config['cnt'][v]['cnt'] += cnt
 
                 if oov not in feat_config['vocab']:
-                    feat_config['vocab'][oov] = {'idx': 0, 'freq_cnt': 0}
+                    feat_config['vocab'][oov] = {'idx': 0, 'cnt': 0}
 
                 if self.verbose:
                     logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
@@ -518,6 +540,72 @@ class FeatureTransformer:
             df = df.with_columns(pad_list = [0] * (max_len - pl.col('original').len()))
             s = df.select(pl.col('original').list.concat(pl.col('pad_list'))).to_series()
         
+        return s
+
+    def post_cross_features(self, feat_config, mode: str = 'transform'):
+        """
+        Cross features after the single feature processing.
+        Only support category features processed by vocabulary.
+        """
+        name = feat_config['name']
+        cross = feat_config.get('post_cross', [])
+        assert isinstance(cross, list) and len(cross) > 1, f'cross features: {cross} should be a list with length > 1'
+
+        if self.verbose:
+            logger.info(f'Processing post cross features for {name}...')
+
+        cross_feat_configs = []
+        for c in cross:
+            find = False
+            for f in self.feat_configs:
+                if f['name'] == c:
+                    cross_feat_configs.append(f)
+                    find = True
+                    break
+            assert find, f'cross feature {c} not found'
+
+        oov = feat_config.get('oov', 'other')  # out of vocabulary
+        if mode in ('fit', 'fit_transform'):
+            cross_vocab = itertools.product(*[zip(f['vocab'].values(), f['vocab'].keys()) for f in cross_feat_configs])
+
+            if len(feat_config.get('vocab', {})) == 0:
+                feat_config['vocab'] = {}
+                idx = 0
+            else:
+                idx = max([v['idx'] for v in feat_config['vocab'].values()])
+            
+            for _, v in enumerate(cross_vocab):
+                sources = [_v[1] for _v in v]
+                key = [_v[0]['idx'] for _v in v]
+                key = '_'.join(map(str, key))
+                if key not in feat_config['vocab']:
+                    idx += 1
+                    feat_config['vocab'][key] = {'idx': idx, 'sources': sources}
+            
+            if oov not in feat_config['vocab']:
+                feat_config['vocab'][oov] = {'idx': 0, 'sources': oov}
+
+            feat_config['num_embeddings'] = idx + 1
+
+            if self.verbose:
+                logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
+
+        if mode == 'fit':
+            return feat_config
+        
+        # cross multiple features
+        s = pl.col(cross[0]).cast(pl.Utf8)
+        for name in cross[1:]:
+            s = s + '_' + pl.col(name).cast(pl.Utf8)
+
+        oov_index = feat_config['vocab'].get(oov)['idx']
+        s = s.replace_strict(
+            old=pl.Series( feat_config['vocab'].keys() ), 
+            new=pl.Series( [v['idx'] for v in feat_config['vocab'].values()] ), 
+            default=oov_index, 
+            return_dtype=pl.UInt64
+        ).fill_null(oov_index)
+
         return s
     
     def get_feat_configs(self):
