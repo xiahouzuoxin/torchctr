@@ -379,7 +379,7 @@ class FeatureTransformer:
                     feat_config['vocab'][oov] = {'idx': 0, 'cnt': 0}
 
                 if self.verbose:
-                    logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
+                    logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {idx + 1}')
 
                 feat_config['num_embeddings'] = idx + 1
             
@@ -494,6 +494,7 @@ class FeatureTransformer:
     def process_list(self, feat_config, s: pl.Expr, mode: str = 'transform'):
         """
         Process list features.
+        TODO: low frequency filtering of crossed features
         """
         name = feat_config['name']
 
@@ -552,7 +553,7 @@ class FeatureTransformer:
         assert isinstance(cross, list) and len(cross) > 1, f'cross features: {cross} should be a list with length > 1'
 
         if self.verbose:
-            logger.info(f'Processing post cross features for {name}...')
+            logger.info(f'Processing post cross features for {name} through {cross}...')
 
         cross_feat_configs = []
         for c in cross:
@@ -564,47 +565,23 @@ class FeatureTransformer:
                     break
             assert find, f'cross feature {c} not found'
 
-        oov = feat_config.get('oov', 'other')  # out of vocabulary
+        num_embeddings = [f['num_embeddings'] for f in cross_feat_configs]
+
         if mode in ('fit', 'fit_transform'):
-            cross_vocab = itertools.product(*[zip(f['vocab'].values(), f['vocab'].keys()) for f in cross_feat_configs])
-
-            if len(feat_config.get('vocab', {})) == 0:
-                feat_config['vocab'] = {}
-                idx = 0
-            else:
-                idx = max([v['idx'] for v in feat_config['vocab'].values()])
-            
-            for _, v in enumerate(cross_vocab):
-                sources = [_v[1] for _v in v]
-                key = [_v[0]['idx'] for _v in v]
-                key = '_'.join(map(str, key))
-                if key not in feat_config['vocab']:
-                    idx += 1
-                    feat_config['vocab'][key] = {'idx': idx, 'sources': sources}
-            
-            if oov not in feat_config['vocab']:
-                feat_config['vocab'][oov] = {'idx': 0, 'sources': oov}
-
-            feat_config['num_embeddings'] = idx + 1
-
+            feat_config['type'] = 'sparse'
+            old_num_embeddings = feat_config.get('num_embeddings', 0)
+            feat_config['num_embeddings'] = int( np.prod(num_embeddings) )
             if self.verbose:
-                logger.info(f'Feature {name} vocab size: {feat_config.get("num_embeddings")} -> {len(feat_config["vocab"])}')
+                logger.info(f'Feature {name} vocab size: {old_num_embeddings} -> {feat_config["num_embeddings"]}')
 
         if mode == 'fit':
             return feat_config
         
         # cross multiple features
-        s = pl.col(cross[0]).cast(pl.Utf8)
-        for name in cross[1:]:
-            s = s + '_' + pl.col(name).cast(pl.Utf8)
-
-        oov_index = feat_config['vocab'].get(oov)['idx']
-        s = s.replace_strict(
-            old=pl.Series( feat_config['vocab'].keys() ), 
-            new=pl.Series( [v['idx'] for v in feat_config['vocab'].values()] ), 
-            default=oov_index, 
-            return_dtype=pl.UInt64
-        ).fill_null(oov_index)
+        fp = list(itertools.accumulate(num_embeddings[:-1], lambda x, y: x * y))
+        s = pl.col(cross[0]).cast(pl.UInt64)
+        for name, p in zip(cross[1:], fp):
+            s = s + pl.col(name).cast(pl.UInt64) * p
 
         return s
     
