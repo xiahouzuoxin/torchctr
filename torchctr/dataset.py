@@ -55,6 +55,16 @@ def get_dataloader(ds: datasets.Dataset,
                         sparse_feat, batch_first=True, 
                         padding_value=list_padding_value, 
                         max_length=list_padding_maxlen)
+                    
+                    weight_col = k.get('weight')
+                    if weight_col:
+                        weight = [sample[weight_col] for sample in batch]
+                        weight = pad_sequences_to_maxlen(
+                            weight, batch_first=True, 
+                            padding_value=0, 
+                            max_length=list_padding_maxlen)
+                        weight = torch.tensor(weight, dtype=torch.float32)
+                        batch_sparse[k['name']+ '_weight'] = weight
                 else:
                     sparse_feat = torch.tensor([[sample[k['name']]] for sample in batch], dtype=torch.long)
                 batch_sparse[k['name']] = sparse_feat

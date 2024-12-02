@@ -148,11 +148,12 @@ class FeatureTransformer:
             )
 
         cross_feats = [f for f in self.feat_configs if f.get('cross', None)]
-        if len(cross_feats) > 0:
-            df = df.with_columns([
-                self.pre_cross_features(f).alias(f['name'])
-                for f in cross_feats
-            ])            
+        expr_feats = [f for f in self.feat_configs if f.get('expr', None)]
+        if len(cross_feats) > 0 or len(expr_feats) > 0:
+            df = df.with_columns(
+                [self.pre_cross_features(f).alias(f['name']) for f in cross_feats] +
+                [self.pre_calc_features(f).alias(f['name']) for f in expr_feats]
+            )            
         
         return df
     
@@ -574,6 +575,19 @@ class FeatureTransformer:
         ]
         s = pl.concat_str(cross_features, separator='_').alias(name)
         return s
+    
+    def pre_calc_features(self, feat_config):
+        """
+        Support pre-calculate features based on the polars expression. For example,
+        {"name": "log_price", "dtype": "numerical",  'expr': "pl.col('price').log(base=2)+1"}
+        """
+        name = feat_config['name']
+        expr = feat_config.get('expr', None)
+        if not expr:
+            raise ValueError(f'expr is required for pre_calc_features: {name}')
+        if self.verbose:
+            logger.info(f'Pre-calculate features for {name} through {expr}...')
+        return eval(expr).alias(name)
 
     def post_cross_features(self, feat_config, mode: str = 'transform'):
         """
