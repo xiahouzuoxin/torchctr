@@ -53,8 +53,8 @@ def get_dataloader(ds: datasets.Dataset,
                     # pad sequences
                     sparse_feat = pad_sequences_to_maxlen(
                         sparse_feat, batch_first=True, 
-                        padding_value=list_padding_value, 
-                        max_length=list_padding_maxlen)
+                        padding_value=k.get('padding_value', list_padding_value), 
+                        max_length=k.get('maxlen', list_padding_maxlen))
                     
                     weight_col = k.get('weight')
                     if weight_col:
@@ -62,7 +62,7 @@ def get_dataloader(ds: datasets.Dataset,
                         weight = pad_sequences_to_maxlen(
                             weight, batch_first=True, 
                             padding_value=0, 
-                            max_length=list_padding_maxlen)
+                            max_length=k.get('maxlen', list_padding_maxlen))
                         weight = torch.tensor(weight, dtype=torch.float32)
                         batch_sparse[k['name']+ '_weight'] = weight
                 else:

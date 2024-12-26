@@ -171,7 +171,7 @@ class FeatureTransformer:
         assert all([f['dtype'] in ['category', 'numerical'] for f in feat_configs]), 'Only support category and numerical features'
         return feat_configs 
 
-    def fit(self, df: pl.DataFrame):
+    def fit(self, df: pl.DataFrame, skip_features: list = []):
         """
         Fit the feature transformer based on the training dataset.
         Can be run it multiple times with multiple datasets to update the feature configurations when cannot load all data into memory at once.
@@ -184,6 +184,7 @@ class FeatureTransformer:
 
         Args:
             df: pl.DataFrame, training dataset
+            skip_features: list, skip the features in the list and not update them
         Returns:
             self: FeatureTransformer
         """
@@ -193,14 +194,14 @@ class FeatureTransformer:
         # Run the feature fitting in parallel, will update the feat_configs in place
         self.df.select([
             self.process_one(pl.col(f['name']), f, mode='fit').alias(f['name']+'_fit')
-            for f in self.feat_configs if not f.get('post_cross', None)
+            for f in self.feat_configs if not f.get('post_cross', None) and f['name'] not in skip_features
         ])
 
         post_cross_feats = [f for f in self.feat_configs if f.get('post_cross', None)]
         if post_cross_feats:
             self.df.select([
                 self.post_cross_features(f, mode='fit') 
-                for f in post_cross_feats
+                for f in post_cross_feats if f['name'] not in skip_features
             ])
 
         self.feat_configs = jsonify(self.feat_configs) # make sure it's serializable

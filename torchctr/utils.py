@@ -6,8 +6,14 @@ import pandas as pd
 import numpy as np
 import json
 import logging
-from sklearn.utils import murmurhash3_32
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
+
+# if exist sklearn then import else pass
+try:
+    from sklearn.utils import murmurhash3_32
+    from sklearn.model_selection import train_test_split, GroupShuffleSplit
+except ImportError:
+    print("sklearn not found, pass")
+    pass
 
 def get_logger(name, level=logging.INFO):
     logger = logging.getLogger(name)
