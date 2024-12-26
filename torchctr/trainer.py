@@ -124,13 +124,13 @@ class Trainer:
             The trained model.
 
         """
+        eval_losses = []
+        
         if init_ckpt_path:
             self.load_ckpt(init_ckpt_path, exclude_keys=init_ckpt_exclude_keys)
-
-        eval_losses = []
-
-        eval_loss = self.evaluate_model(self.model, eval_dataloader)
-        self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
+            eval_loss = self.evaluate_model(self.model, eval_dataloader)
+            self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
+            eval_losses.append(eval_loss)
 
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
