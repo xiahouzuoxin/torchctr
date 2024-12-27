@@ -1,6 +1,7 @@
 from copy import deepcopy
 import itertools
 import json
+import os
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -458,7 +459,7 @@ class FeatureTransformer:
                         idx += 1
                         feat_config['vocab'][v] = {'idx': idx, 'cnt': cnt}
                     elif v in feat_config['vocab']:
-                        feat_config['cnt'][v]['cnt'] += cnt
+                        feat_config['vocab'][v]['cnt'] += cnt
 
                 if oov not in feat_config['vocab']:
                     feat_config['vocab'][oov] = {'idx': 0, 'cnt': 0}
@@ -709,15 +710,77 @@ class FeatureTransformer:
     def get_feat_configs(self):
         return self.feat_configs
     
-    def save(self, path):
+    def save(self, path, vocab_file=None):
+        '''Save the feature configurations to json files.
+        Args:
+          path: str, path to save the feature configurations
+          vocab_file: str, path to save the vocab file, help to making the main feature configs more readable. 
+            If not set, vocab will save together with the feature configurations.
+            If True, vocab will save to the path with the same name as the feature configurations but with _vocab.json.
+        Returns:
+          path: str, the path saved the feature configurations
+        '''
         if not path.endswith('.json'):
             path = path + '.json'
+
+        if vocab_file:
+            if isinstance(vocab_file, bool):
+                vocab_file = path.replace('.json', '_vocab.json')
+            # extract all vocab from feat_configs and link to the vocab_file
+            vocabs = {}
+            feat_configs = deepcopy(self.feat_configs)
+            for k, f in enumerate(feat_configs):
+                vocab = f.get('vocab', None)
+                if not vocab:
+                    continue
+                vocabs[f['name']] = vocab
+                # update the vocab to the base file name
+                feat_configs[k]['vocab'] = os.path.basename(vocab_file)
+            with open(vocab_file, 'w') as wf:
+                json.dump(vocabs, wf)
+            logger.info(f'Vocab file saved to {vocab_file}')
+        else:
+            feat_configs = self.feat_configs
+        
         with open(path, 'w') as wf:
-            json.dump(self.feat_configs, wf)
+            json.dump(feat_configs, wf)
         return path
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, vocab_file=True):
+        ''' Load the feature configurations from json files.
+        Args:
+          path: str, path to load the feature configurations.
+          vocab_file: str, the default path of the vocab file. Not overwrite if the vocab is existed.
+            If True, will load from the path with the same name as the feature configurations but with _vocab.json.
+            If String, will load from the specified path. 
+        '''
         with open(path, 'r') as rf:
             feat_configs = json.load(rf)
+        if not vocab_file:
+            return cls(feat_configs=feat_configs)
+        
+        if vocab_file == True:
+            vocab_file = path.replace('.json', '_vocab.json')
+        elif '/' not in vocab_file:
+            # default vocab file is the same path to main feature configuration file
+            vocab_file = os.path.join(os.path.dirname(path), vocab_file)
+
+        vocab_cache = {}
+        for k, f in enumerate(feat_configs):
+            if f['dtype'] != 'category':
+                continue
+            cur_vocab_file = f.get('vocab', vocab_file)
+            if not isinstance(vocab_file, str):
+                # may already existing vocab, not load from vocab file
+                continue
+            if not os.path.exists(cur_vocab_file):
+                raise FileNotFoundError(f'Vocab file {cur_vocab_file} not found for feature {f["name"]}')
+            
+            if cur_vocab_file not in vocab_cache:
+                logger.info(f'Loading vocab file {cur_vocab_file}...')
+                with open(cur_vocab_file, 'r') as rf:
+                    vocab_cache[cur_vocab_file] = json.load(rf)
+            feat_configs[k]['vocab'] = vocab_cache[cur_vocab_file].get(f['name'], {})
+
         return cls(feat_configs=feat_configs)

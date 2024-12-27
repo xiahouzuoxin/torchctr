@@ -292,7 +292,7 @@ class Trainer:
                 else:
                     return None
         
-        ckpt = torch.load(ckpt_file)
+        ckpt = torch.load(ckpt_file, weights_only=False)
 
         if exclude_keys == 'all_except_model':
             exclude_keys = set(ckpt.keys()) - set(['model',])
