@@ -11,11 +11,14 @@ class FeatureTransformer:
                  feat_configs=None, 
                  category_min_freq=None,
                  category_case_sensitive=True,
+                 category_oov='other',
+                 category_outliers:list|dict=None, 
+                 category_fillna=None,
+                 numerical_fillna='mean',
                  list_padding_value=None,
-                 list_padding_maxlen=None,
-                 outliers_category=[], 
-                 outliers_numerical=[], 
-                 verbose=False):
+                 list_maxlen=None,
+                 verbose=False,
+                 **kwargs):
         """
         Feature transforming for both train and test dataset with Polars DataFrame (it's much faster than pandas DataFrame).
         Args:
@@ -27,20 +30,41 @@ class FeatureTransformer:
                     {'name': 'c', 'dtype': 'category', 'islist': True, 'emb_dim': 8, 'maxlen': 256}, # sequence feature, if maxlen is set, it will truncate the sequence to the maximum length
                 ]
                 If feat_configs is None or list of column names, it will be auto-generated based on the input DataFrame when calling fit() or fit_transform().
-            category_min_freq: int, minimum frequency for category features, only effective when fitting
-            outliers_category: list, outliers for category features
-            outliers_numerical: list, outliers for numerical features
+            
+            Below are the default feature configurations if not exist in feat_configs:
+                category_min_freq: int, minimum frequency for category features, only effective when fitting
+                category_case_sensitive: bool, if False, convert category features to lowercase
+                category_outliers: list or dict, outliers for category features.
+                    If list then replace with 'category_oov', if dict then replace with the value.
+                category_oov: str, default value for out-of-vocabulary category features. Default is 'other'.
+                category_fillna: str, default value for missing category features. 
+                    If not set, no process and take it as a new category. 
+                    If want it to be oov, then set it explicitly here.
+                numerical_fillna: float, default value for missing numerical features. Options: 'mean', 'min', 'max', or a float number.
+                list_padding_value: int, default value for padding list features. Default is None will not padding. 
+                    If list_maxlen is set, it will padding to the maximum length else padding to the maximum length of the data.
+                list_maxlen: int, maximum length for list features. Default is None will not truncate.
+           
             verbose: bool, whether to print the processing details
-            n_jobs: int, number of parallel jobs
+
+            **kwargs: placeholder for other parameters. Following the rule: dtype + '_' + parameter, for example, 'category_min_freq', etc.
         """
         self.feat_configs = deepcopy(feat_configs)
         self.category_min_freq = category_min_freq
-        self.outliers_category = outliers_category
-        self.outliers_numerical = outliers_numerical
+        self.category_outliers = category_outliers
         self.category_case_sensitive = category_case_sensitive
+        self.category_oov = category_oov
+        self.category_fillna = category_fillna
+        self.numerical_fillna = numerical_fillna
         self.list_padding_value = list_padding_value
-        self.list_padding_maxlen = list_padding_maxlen
+        self.list_maxlen = list_maxlen
         self.verbose = verbose
+
+        for k, v in kwargs.items():
+            if k.startswith('category_') or k.startswith('numerical_') or k.startswith('list_'):
+                setattr(self, k, v)
+            else:
+                raise ValueError(f'Unsupported parameter: {k}')
 
     @staticmethod
     def autogen_init_feat_configs(df: pl.DataFrame, 
@@ -102,6 +126,7 @@ class FeatureTransformer:
             # Add the column info to feature configs
             feat_configs.append(col_info)
 
+        feat_configs = jsonify(feat_configs)
         logger.info(f'Auto-generated feature configurations: {feat_configs}')
 
         return feat_configs
@@ -290,7 +315,7 @@ class FeatureTransformer:
 
         return ret
 
-    def _process_category(self, s, oov: str, outliers = None, case_sensitive = True):
+    def _process_category(self, s, oov: str, outliers = None, case_sensitive = True, fillna = None):
         ''' Convert a series to a string series, with float/integer values considered.
         '''
         # Attempt to convert strings to integers
@@ -319,7 +344,10 @@ class FeatureTransformer:
 
             s = s.replace(outliers)
 
-        s = s.fill_null(oov)
+        if fillna:
+            s = s.fill_null(fillna)
+        else:
+            s = s.fill_null('__null__') # fill null with a default string for simplicity purpose
 
         return s
 
@@ -328,16 +356,21 @@ class FeatureTransformer:
         Process category features.
         """
         name = feat_config['name']
-        oov = feat_config.get('oov', 'other')  # out of vocabulary
-        outliers_category = feat_config.get('outliers', self.outliers_category)
+        oov = feat_config.get('oov', self.category_oov)  # out of vocabulary
+        category_outliers = feat_config.get('outliers', self.category_outliers)
         category_case_sensitive = feat_config.get('case_sensitive', self.category_case_sensitive)
+        category_fillna = feat_config.get('fillna', self.category_fillna)
 
-        s = self._process_category(s, oov, outliers=outliers_category, case_sensitive=category_case_sensitive)
+        s = self._process_category(s, oov, outliers=category_outliers, case_sensitive=category_case_sensitive, fillna=category_fillna)
 
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse'
-            feat_config['case_sensitive'] = category_case_sensitive
-            feat_config['oov'] = oov
+            if 'case_sensitive' not in feat_config:
+                feat_config['case_sensitive'] = category_case_sensitive
+            if 'outliers' not in feat_config:
+                feat_config['outliers'] = category_outliers
+            if 'oov' not in feat_config:
+                feat_config['oov'] = oov
             hash_buckets = feat_config.get('hash_buckets', None)
             if hash_buckets:
                 assert hash_buckets == 'auto' or isinstance(hash_buckets, int), f'hash_buckets should be an integer or "auto" for feature: {name}'
@@ -459,7 +492,13 @@ class FeatureTransformer:
                     feat_config['max'] = stats['max']
                 else:
                     feat_config['max'] = max(feat_config.get('max', stats['max']), stats['max'])
-                    
+                
+                if 'fillna' not in feat_config and self.numerical_fillna:
+                    if self.numerical_fillna in ['mean', 'min', 'max']:
+                        feat_config['fillna'] = feat_config[self.numerical_fillna]
+                    else:
+                        feat_config['fillna'] = float(self.numerical_fillna)
+
                 if self.verbose:
                     logger.info(f'Feature {name} updated: mean={feat_config["mean"]}, std={feat_config["std"]}, min={feat_config["min"]}, max={feat_config["max"]}')
             elif bins:
@@ -480,16 +519,9 @@ class FeatureTransformer:
             return s
         
         if normalize:
-            oov = feat_config.get('oov', feat_config['mean'])
-            if oov == 'mean':
-                oov = feat_config['mean']
-            elif oov == 'min':
-                oov = feat_config['min']
-            elif oov == 'max':
-                oov = feat_config['max']
-            else:
-                oov = float(oov)
-            s = s.fill_null(oov).fill_nan(oov)
+            fillna = feat_config.get('fillna', None)
+            if fillna:
+                s = s.fill_null(fillna).fill_nan(fillna)
 
             if normalize == 'std':
                 s = (s - feat_config['mean']) / feat_config['std']
@@ -513,7 +545,7 @@ class FeatureTransformer:
                 logger.info(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
             s = s.str.split(',').cast(pl.List)
         
-        max_len = feat_config.get('maxlen', self.list_padding_maxlen)
+        max_len = feat_config.get('maxlen', self.list_maxlen)
         if max_len:
             s = s.list.slice(0, max_len)
 
@@ -571,7 +603,7 @@ class FeatureTransformer:
 
         cross_features = [
             self._process_category(
-                pl.col(f['name']), f.get('oov', 'other'), f.get('outliers', []), f.get('case_sensitive', True)
+                pl.col(f['name']), f.get('oov', self.category_oov), f.get('outliers', []), f.get('case_sensitive', True)
             ) for f in cross_feat_configs
         ]
         s = pl.concat_str(cross_features, separator='_').alias(name)
