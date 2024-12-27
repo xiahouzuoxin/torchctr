@@ -2,11 +2,15 @@ from copy import deepcopy
 import itertools
 import json
 import numpy as np
+import pandas as pd
 import polars as pl
 from .utils import jsonify, logger
 from .utils import hash_bucket as hash_bucket_fn
 
 class FeatureTransformer:
+    _auto_df_convert_enable = True
+    _auto_df_convert_back = False
+
     def __init__(self, 
                  feat_configs=None, 
                  category_min_freq=None,
@@ -67,6 +71,40 @@ class FeatureTransformer:
                 raise ValueError(f'Unsupported parameter: {k}')
 
     @staticmethod
+    def auto_df_cvt(func):
+        """
+        Convert the input DataFrame to polars DataFrame if exists.
+        """
+        def wrapper(*args, **kwargs):
+            if not FeatureTransformer._auto_df_convert_enable:
+                return func(*args, **kwargs)
+
+            _convert_back = FeatureTransformer._auto_df_convert_back
+            # check all the parameters to find the first pd.DataFrame or pl.DataFrame
+            for k, arg in enumerate(args):
+                if not isinstance(arg, (pd.DataFrame, pl.DataFrame)):
+                    continue
+
+                if isinstance(arg, pd.DataFrame):
+                    logger.warning('Converting pandas DataFrame to polars DataFrame...')
+                    args = list(args)
+                    args[k] = pl.DataFrame(arg)
+                    args = tuple(args)
+                    result = func(*args, **kwargs)
+                    if _convert_back:
+                        logger.warning('Converting polars DataFrame back to pandas DataFrame if exists...')
+                        if isinstance(result, tuple):
+                            return tuple([r.to_pandas() if isinstance(r, pl.DataFrame) else r for r in result])
+                        elif isinstance(result, pl.DataFrame):
+                            return result.to_pandas()
+                        return result
+                    return result
+                else:
+                    return func(*args, **kwargs)
+        return wrapper
+
+    @staticmethod
+    @auto_df_cvt
     def autogen_init_feat_configs(df: pl.DataFrame, 
                                   columns: list = None, 
                                   min_emb_dim: int = 6, 
@@ -132,6 +170,7 @@ class FeatureTransformer:
         return feat_configs
 
     @staticmethod
+    @auto_df_cvt
     def split(df: pl.DataFrame, group_col: str = None, test_size: float = 0.2, shuffle: bool = True, random_state: int = 3407):
         """
         Split the dataset into train and test datasets.
@@ -196,6 +235,7 @@ class FeatureTransformer:
         assert all([f['dtype'] in ['category', 'numerical'] for f in feat_configs]), 'Only support category and numerical features'
         return feat_configs 
 
+    @auto_df_cvt
     def fit(self, df: pl.DataFrame, skip_features: list = []):
         """
         Fit the feature transformer based on the training dataset.
@@ -234,6 +274,7 @@ class FeatureTransformer:
 
         return self
     
+    @auto_df_cvt
     def transform(self, df: pl.DataFrame):
         """
         Transform the dataset based on the feature configurations.
@@ -262,6 +303,7 @@ class FeatureTransformer:
         
         return df
 
+    @auto_df_cvt
     def fit_transform(self, df: pl.DataFrame):
         """
         Fit and transform the dataset based on the feature configurations.
