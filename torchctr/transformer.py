@@ -408,12 +408,14 @@ class FeatureTransformer:
 
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse'
-            if 'case_sensitive' not in feat_config:
+            if 'case_sensitive' not in feat_config and category_case_sensitive:
                 feat_config['case_sensitive'] = category_case_sensitive
-            if 'outliers' not in feat_config:
+            if 'outliers' not in feat_config and category_outliers:
                 feat_config['outliers'] = category_outliers
-            if 'oov' not in feat_config:
+            if 'oov' not in feat_config and oov:
                 feat_config['oov'] = oov
+            if 'fillna' not in feat_config and category_fillna:
+                feat_config['fillna'] = category_fillna
             hash_buckets = feat_config.get('hash_buckets', None)
             if hash_buckets:
                 assert hash_buckets == 'auto' or isinstance(hash_buckets, int), f'hash_buckets should be an integer or "auto" for feature: {name}'
@@ -443,7 +445,8 @@ class FeatureTransformer:
 
                 # low frequency category filtering
                 min_freq = feat_config.get('min_freq', self.category_min_freq)
-                feat_config['min_freq'] = min_freq
+                if 'min_freq' not in feat_config and min_freq:
+                    feat_config['min_freq'] = min_freq
                 if min_freq:
                     raw_vocab = raw_vocab.filter(pl.col('count') >= min_freq)
 
@@ -608,6 +611,10 @@ class FeatureTransformer:
             raise ValueError(f'Unsupported data type: {dtype}')
 
         if mode == 'fit':
+            if 'maxlen' not in feat_config and self.list_maxlen:
+                feat_config['maxlen'] = max_len
+            if 'padding_value' not in feat_config and self.list_padding_value:
+                feat_config['padding_value'] = self.list_padding_value
             return s
         
         # group by index and aggregate back

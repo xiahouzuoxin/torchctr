@@ -139,7 +139,8 @@ class Trainer:
             train_loss = {'loss': 0., } or []
 
             # print the latest learning rate of lr_scheduler
-            self.logger.info(f'Learning rate: {self.optimizer.param_groups[0]["lr"]}') # the learning rate of the first parameter group
+            for k, param_group in enumerate(self.optimizer.param_groups):
+                self.logger.info(f'Learning rate of group {k}: {param_group["lr"]}')
         
             # Training 
             for k, batch in enumerate(train_dataloader):
