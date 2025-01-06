@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import json
 import logging
+logging.basicConfig(level=logging.DEBUG)
 
 # if exist sklearn then import else pass
 try:
@@ -15,9 +16,10 @@ except ImportError:
     print("sklearn not found, pass")
     pass
 
-def get_logger(name, level=logging.INFO):
+def get_logger(name, level=logging.INFO, use_accelerate=False):
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    logging.root.setLevel(level)
     # prevent duplicate logs
     logger.propagate = False
     # Prevent duplicate handlers
@@ -29,6 +31,10 @@ def get_logger(name, level=logging.INFO):
         ch = logging.StreamHandler()
         ch.setFormatter(formatter)
         logger.addHandler(ch)
+
+    if use_accelerate:
+        from accelerate.logging import MultiProcessAdapter
+        logger = MultiProcessAdapter(logger, {})
 
     return logger
 

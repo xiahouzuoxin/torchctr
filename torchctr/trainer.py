@@ -6,7 +6,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .utils import logger
+from .utils import logger, get_logger
+
+try:
+    from accelerate import Accelerator
+    logger.info('accelerate is installed.')
+    has_accelerate = True
+except ImportError:
+    logger.warning('accelerate is not installed.')
+    has_accelerate = False
 
 class Trainer:
     def __init__(self, model: nn.Module, 
@@ -23,6 +31,7 @@ class Trainer:
                  validation_step_func = None,
                  callback_train_epoch_end = None,
                  callback_eval_epoch_end = None,
+                 use_accelerate=has_accelerate,
                  **kwargs):
         """
         Initializes the Trainer object.
@@ -91,6 +100,15 @@ class Trainer:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+        if use_accelerate:
+            self.accelerator = Accelerator()
+            self.logger.info(f'Accelerate device: {self.accelerator.device}')
+            self.model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model, self.optimizer, self.lr_scheduler)
+
+            self.logger = get_logger('Trainer', level='INFO', use_accelerate=True)
+        else:
+            self.accelerator = None
+
     def collect_loss(self, step_func_ret, accumulates: list=None):
         '''
         Collect the loss from the step function return value.
@@ -127,11 +145,14 @@ class Trainer:
         agg_func = np.sum if agg == 'sum' else np.mean
         if isinstance(lastn[0], dict):
             lastn_agg = {k: agg_func([v[k] for v in lastn]).item() for k in lastn[0].keys()}
+            final_loss = lastn_agg['loss']
         elif isinstance(lastn[0], (list, tuple)):
             lastn_agg = type(lastn[0])([agg_func([v[i] for v in lastn]).item() for i in range(len(lastn[0]))])
+            final_loss = lastn_agg[0]
         else:
             lastn_agg = agg_func(lastn).item()
-        return lastn_agg
+            final_loss = lastn_agg
+        return final_loss, lastn_agg
 
     def evaluate_model(self, model, eval_dataloader):
         if eval_dataloader is None or model is None or self.validation_step_func is None:
@@ -147,8 +168,6 @@ class Trainer:
 
             if self.callback_eval_epoch_end:
                 self.callback_eval_epoch_end(eval_loss)
-
-            eval_loss = self.getstat_lastn_accumulates(eval_loss, n=len(eval_dataloader), agg='mean')
         return eval_loss
 
     def fit(self, 
@@ -171,13 +190,17 @@ class Trainer:
             The trained model.
 
         """
-        eval_losses = []
+        if self.accelerator:
+            train_dataloader, eval_dataloader = self.accelerator.prepare([train_dataloader, eval_dataloader])
+
+        final_eval_losses = []
         
         if init_ckpt_path:
             self.load_ckpt(init_ckpt_path, exclude_keys=init_ckpt_exclude_keys)
             eval_loss = self.evaluate_model(self.model, eval_dataloader)
+            final_loss, eval_loss = self.getstat_lastn_accumulates(eval_loss, n=len(eval_dataloader), agg='mean')
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
-            eval_losses.append(eval_loss)
+            final_eval_losses.append(final_loss)
 
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
@@ -196,7 +219,11 @@ class Trainer:
 
                 # accumulate losses and compute gradients
                 loss, train_loss = self.collect_loss(train_ret, train_loss)
-                loss.backward()             # compute gradients
+
+                if self.accelerator:
+                    self.accelerator.backward(loss)
+                else:
+                    loss.backward()             # compute gradients
                 
                 self.optimizer.step()       # adjust parameters based on the calculated gradients 
                 if self.lr_scheduler:
@@ -204,11 +231,11 @@ class Trainer:
                 self.global_steps += 1
 
                 if k % self.log_steps == 0:
-                    latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.log_steps)
+                    _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.log_steps)
                     self.logger.info(f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_loss}')
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
-                    latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.save_ckpt_steps)
+                    _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.save_ckpt_steps)
                     self.save_ckpt(self.ckpt_file_prefix, 
                                    local_steps=k+len(train_dataloader)*self.num_epoch-1, 
                                    eval_loss=None, train_loss=latest_loss)
@@ -216,19 +243,25 @@ class Trainer:
             if self.callback_train_epoch_end:
                 self.callback_train_epoch_end(train_loss)
 
-            eval_loss = self.evaluate_model(self.model, eval_dataloader)
+            if self.accelerator:
+                self.accelerator.wait_for_everyone()
+
+            eval_loss_batches = self.evaluate_model(self.model, eval_dataloader)
+            final_eval_loss, eval_loss = self.getstat_lastn_accumulates(eval_loss_batches, n=len(eval_dataloader), agg='mean')
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
 
             if self.save_ckpt_steps == 'epoch':
-                self.save_ckpt(self.ckpt_file_prefix, local_steps=self.num_epoch*len(train_dataloader), eval_loss=eval_loss)
+                self.save_ckpt(self.ckpt_file_prefix, 
+                            local_steps=self.num_epoch*len(train_dataloader), 
+                            eval_loss=final_eval_loss)
 
             if self.early_stopping_rounds and eval_loss is not None:
-                if len(eval_losses) >= self.early_stopping_rounds:
-                    eval_loss_his_avg = np.mean([v['loss'] for v in eval_losses[-self.early_stopping_rounds:]])
-                    if eval_loss['loss'] > eval_loss_his_avg:
+                if len(final_eval_losses) >= self.early_stopping_rounds:
+                    eval_loss_his_avg = np.mean( final_eval_losses[-self.early_stopping_rounds:] )
+                    if final_eval_loss > eval_loss_his_avg:
                         self.logger.info(f'Early stopping at epoch {self.num_epoch}...')
                         break
-            eval_losses.append(eval_loss)
+            final_eval_losses.append(final_eval_loss)
 
         if ret_model == 'best':
             self.load_ckpt(self.save_ckpt_path, ret_best=True)
@@ -273,8 +306,8 @@ class Trainer:
             else:
                 metadata = {}
 
-            if eval_loss is not None and eval_loss['loss'] < metadata.get('best_eval_loss', float('inf')):
-                metadata['best_eval_loss'] = eval_loss['loss']
+            if eval_loss is not None and eval_loss < metadata.get('best_eval_loss', float('inf')):
+                metadata['best_eval_loss'] = eval_loss
                 metadata['best_eval_global_steps'] = self.global_steps
                 metadata['best_ckpt'] = f'{prefix}.{self.global_steps:06}.ckpt'
 
