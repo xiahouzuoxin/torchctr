@@ -100,15 +100,16 @@ def auto_generate_feature_configs(
     
     return feat_configs
 
-def hash_bucket(v, buckets, method='murmurhash3'):
+def hash_bucket(v, buckets, method='murmurhash3', seed=0):
     """
     Hash function to map a value to a hash bucket
     """
-    # hash_object = hashlib.sha256(str(v).encode())
-    # hash_digest = hash_object.hexdigest()
-    # hash_integer = int(hash_digest, 16)
-
-    hash_integer = murmurhash3_32(str(v), seed=42, positive=True)
+    if method == 'murmurhash3':
+        hash_integer = murmurhash3_32(str(v), seed=seed, positive=True)
+    else:
+        hash_object = hashlib.sha256(str(v).encode())
+        hash_digest = hash_object.hexdigest()
+        hash_integer = int(hash_digest, 16)
     return hash_integer % buckets
 
 def pad_list(arr_list, padding_value, max_len=None):

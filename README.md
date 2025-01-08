@@ -11,16 +11,12 @@ This directory aims to train a Click-Through Rate (CTR) model using PyTorch. It'
 ## Features:
 
 * Fast [FeatureTransformer](./torchctr/transformer.py) for DNN (tested on >100millon rows on single machine). Which support:
-  - Both numerical and categorical input features
-    - Categorical: automatic vocabulary extraction, low-frequency filtering, dynamic embedding, hash embedding
-    - Numerical: standard/0-1 normalization, automatic discretization, automatic update of statistical number for standard/0-1 normalization when multiple times of fitting.
-  - Variable-length sequence feature support, if there's order in the sequence, please put the latest data before the oldest data as it may pads at the end of the sequence
+  - Categorical: automatic vocabulary extraction, low-frequency filtering, dynamic embedding, hash embedding
+  - Numerical: standard/0-1 normalization, automatic discretization, automatic update of statistical number for standard/0-1 normalization when multiple times of fitting.
+  - Variable-length sequence feature: there's order in the sequence, if want to padding when feature transformer, please put the latest data before the oldest data as it may pads at the end of the sequence by default.
+  - [More feature configurations](./feature_conf.md)...
 * Implemented a common [Trainer](./torchctr/trainer.py) for training pytorch models, and save/load the results
 * Basic FastAPI for [Model API Serving](./torchctr/serving/serve.py)
-
-Not supported:
-
-- Distribution training, as target of this tool is for small companies. And I used polars to speed up the data processing.
 
 # Install
 

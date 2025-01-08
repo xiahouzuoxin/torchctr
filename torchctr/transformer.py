@@ -26,11 +26,12 @@ class FeatureTransformer:
                  **kwargs):
         """
         Feature transforming for both train and test dataset with Polars DataFrame (it's much faster than pandas DataFrame).
+        
         Args:
             feat_configs: list of dict, feature configurations. for example, 
                 [
                     {'name': 'a', 'dtype': 'numerical', 'norm': 'std'},   # 'norm' in ['std','[0,1]']
-                    {'name': 'a', 'dtype': 'numerical', 'hash_buckets': 10, emb_dim: 8}, # Discretization
+                    {'name': 'a', 'dtype': 'numerical', 'bins': 10, emb_dim: 8}, # Discretization
                     {'name': 'b', 'dtype': 'category', 'emb_dim': 8, 'hash_buckets': 100}, # category feature with hash_buckets
                     {'name': 'c', 'dtype': 'category', 'islist': True, 'emb_dim': 8, 'maxlen': 256}, # sequence feature, if maxlen is set, it will truncate the sequence to the maximum length
                 ]
@@ -439,6 +440,9 @@ class FeatureTransformer:
                 
                 feat_config['hash_buckets'] = hash_buckets
                 feat_config['num_embeddings'] = hash_buckets
+
+                if 'seed' not in feat_config:
+                    feat_config['seed'] = 0
             else:
                 raw_vocab = s.value_counts(name='count')
                 raw_vocab: pl.DataFrame = self.df.select(raw_vocab).unnest(name)  # compute the raw_vocab immediately
@@ -477,7 +481,8 @@ class FeatureTransformer:
         
         hash_buckets = feat_config.get('hash_buckets', None)
         if hash_buckets:
-            s = s.map_elements(lambda x: hash_bucket_fn(x, hash_buckets), return_dtype=pl.Int32)
+            seed = feat_config.get('seed', 0)
+            s = s.map_elements(lambda x: hash_bucket_fn(x, hash_buckets, seed=seed), return_dtype=pl.Int32)
         else:
             oov_index = feat_config['vocab'].get(oov)['idx']
             s = s.replace_strict(
