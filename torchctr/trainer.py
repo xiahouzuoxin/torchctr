@@ -276,6 +276,8 @@ class Trainer:
         # save all the other serializable attributes in __init__ function
         other_states = kwargs
         other_states.update(self.__dict__)
+        if hasattr(self.model, 'feat_configs'):
+            other_states['feat_configs'] = self.model.feat_configs
         for k, v in other_states.items():
             if k in state_dict or k in (
                 'accelerator', 'logger', 
@@ -399,6 +401,9 @@ class Trainer:
                     str_v = str(v) if len(str(v)) < 100 else (str(v)[:100] + '...')
                     self.logger.info(f'Loading {k} = {str_v} from checkpoint.')                    
                     self.__dict__[k] = v
+            elif k in ['feat_configs']:
+                self.logger.info(f'Loading {k} from checkpoint.')
+                self.model.feat_configs = v
 
         self.logger.info(f'Checkpoint loaded from {ckpt_file}.')
 

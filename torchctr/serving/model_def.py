@@ -6,28 +6,28 @@ from torchctr.nn.functional import pad_sequences_to_maxlen
 from torchctr.transformer import FeatureTransformer
 from torchctr.utils import logger
 
-class BaseServingModel:
-    def __init__(self, model: torch.nn.Module | str, feat_configs: list[dict] | str = None):
-        '''
-        model: model object of torch.nn.Module or path to the model checkpoint
-        feat_configs: feature configurations, list of dictionaries or path to the feature configurations
-        '''
-        if isinstance(model, str):
-            self.model = torch.load(model, weights_only=False)
-            if model.endswith('.ckpt'):
-                self.model = self.model['model']
-        else:
-            self.model = model
-        self.model.eval()
+from ..models import DNN
 
-        if feat_configs is None:
-            logger.info('Feature configurations not provided. Try geting the feature configurations from the model.')
-            self.feat_configs = self.model.feat_configs
+class ServingDNNModel:
+    def __init__(self, ckpt_path: str, feat_configs: list[dict] | str = None):
+        '''
+        Args:
+            ckpt_path: path to the model checkpoint
+            feat_configs: feature configurations, list of dictionaries or path to the feature configurations
+        '''
+        ckpt = torch.load(ckpt_path, weights_only=True)
+        if feat_configs is None and 'feat_configs' in ckpt:
+            self.feat_configs = ckpt['feat_configs']
         elif isinstance(feat_configs, str):
             with open(feat_configs, 'r') as f:
                 self.feat_configs = json.load(f)
         else:
-            self.feat_configs = feat_configs
+            raise ValueError('feat_configs is required')
+        
+        self.model = DNN(self.feat_configs, [128,64,32])
+
+        self.model.load_state_dict(ckpt['model'])
+        self.model.eval()
 
         self.ft = FeatureTransformer(self.feat_configs)
 

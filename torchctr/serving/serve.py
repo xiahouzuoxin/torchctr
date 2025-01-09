@@ -6,15 +6,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 
-from .model_def import BaseServingModel
+from .model_def import ServingDNNModel
 from ..utils import logger
 
 # import other ServingModel classes here if needed
 
 # Add your serving models here
 serving_models = {
-    # 'name': {'path': 'path/to/model', 'serving_class': BaseServingModel, 'dep_paths': 'path/to/dependencies/if/needed'}
-    # 'dnn': {'path': 'examples/ckpt/checkpoint.010568.ckpt', 'serving_class': BaseServingModel},
+    # 'name': {'path': 'path/to/model', 'model': ServingDNNModel, 'dep_paths': 'path/to/dependencies/if/needed'}
+    # 'dnn': {'path': 'examples/ckpt/checkpoint.010568.ckpt', 'model': ServingDNNModel},
 }
 
 class ServeRequest(BaseModel):
@@ -30,10 +30,12 @@ async def init_models():
     for name, model in serving_models.items():
         if model.get('dep_paths', None):
             sys.path.append(model['dep_paths'])
-        serving_class = model.get('serving_class', BaseServingModel)
-        if isinstance(serving_class, str):
-            serving_class = eval(serving_class)
-        serving_models[name]['model'] = serving_class(model['path'])
+        serving_model = model.get('model', None)
+        if serving_model is None:
+            raise ValueError('model is required')
+        if isinstance(serving_model, str):
+            serving_model = eval(serving_model)
+        serving_models[name]['model'] = serving_model(model['path'], model.get('ft', None))
         logger.info(f'Model {name} loaded from {model["path"]} successfully')
 
 @app.post('/{name}/predict')
@@ -72,7 +74,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument('--path', type=str, default=None)
-    parser.add_argument('--serving_class', type=str, default='BaseServingModel', help='Serving model class name')
+    parser.add_argument('--model', type=str, help='Serving model class name')
+    parser.add_argument('--ft', type=str, help='Feature transformer configuration')
     parser.add_argument('--dep_paths', type=str, default=None, help='Comma separated list of dependencies paths, for example, model class definition')
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=8000)
@@ -83,7 +86,7 @@ if __name__ == '__main__':
 
         if args.name in serving_models:
             logger.info(f'Model {args.name} already exists, will be updated.')
-        serving_models[args.name] = {'path': args.path, 'serving_class': args.serving_class, 'dep_paths': args.dep_paths}
+        serving_models[args.name] = {'path': args.path, 'model': args.model, 'ft': args.ft, 'dep_paths': args.dep_paths}
 
     if len(serving_models) == 0:
         logger.info('No serving models found. Please add serving models to `serving_models` dictionary, exiting...')
