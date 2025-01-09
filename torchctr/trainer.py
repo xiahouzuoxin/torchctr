@@ -190,7 +190,7 @@ class Trainer:
 
         """
         if self.accelerator:
-            train_dataloader, eval_dataloader = self.accelerator.prepare([train_dataloader, eval_dataloader])
+            train_dataloader, eval_dataloader = self.accelerator.prepare(train_dataloader, eval_dataloader)
 
         final_eval_losses = []
         
