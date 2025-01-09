@@ -10,10 +10,8 @@ from .utils import logger, get_logger
 
 try:
     from accelerate import Accelerator
-    logger.info('accelerate is installed.')
     has_accelerate = True
 except ImportError:
-    logger.warning('accelerate is not installed.')
     has_accelerate = False
 
 class Trainer:
@@ -61,7 +59,8 @@ class Trainer:
 
         self.ckpt_file_prefix = 'checkpoint' if ckpt_file_prefix is None else ckpt_file_prefix
         self.num_epoch = 0 
-        self.global_steps = 0    
+        self.global_steps = 0 # steps including previous training from the loaded checkpoint
+        self.local_steps = 0 # steps start from this training
 
         if self.optimizer is None and hasattr(self.model, 'configure_optimizers'):
             self.optimizer = self.model.configure_optimizers()
@@ -229,6 +228,7 @@ class Trainer:
                 if self.lr_scheduler:
                     self.lr_scheduler.step()
                 self.global_steps += 1
+                self.local_steps += 1
 
                 if k % self.log_steps == 0:
                     _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.log_steps)
@@ -236,9 +236,7 @@ class Trainer:
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
                     _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.save_ckpt_steps)
-                    self.save_ckpt(self.ckpt_file_prefix, 
-                                   local_steps=k+len(train_dataloader)*self.num_epoch-1, 
-                                   eval_loss=None, train_loss=latest_loss)
+                    self.save_ckpt(self.ckpt_file_prefix, eval_loss=None, train_loss=latest_loss)
                     
             if self.callback_train_epoch_end:
                 self.callback_train_epoch_end(train_loss)
@@ -251,9 +249,7 @@ class Trainer:
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
 
             if self.save_ckpt_steps == 'epoch':
-                self.save_ckpt(self.ckpt_file_prefix, 
-                            local_steps=self.num_epoch*len(train_dataloader), 
-                            eval_loss=final_eval_loss)
+                self.save_ckpt(self.ckpt_file_prefix, eval_loss=final_eval_loss)
 
             if self.early_stopping_rounds and eval_loss is not None:
                 if len(final_eval_losses) >= self.early_stopping_rounds:
@@ -268,34 +264,50 @@ class Trainer:
 
         return self.model
     
-    def save_ckpt(self, prefix: str, local_steps: int = None, eval_loss=None, **kwargs):
+    def get_state_dict(self, **kwargs):
+        '''
+        Get the state_dict of the model, optimizer and lr_scheduler.
+        '''
+        state_dict = {
+            'model': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'lr_scheduler': self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
+        }
+        # save all the other serializable attributes in __init__ function
+        other_states = kwargs
+        other_states.update(self.__dict__)
+        for k, v in other_states.items():
+            if k in state_dict or k in (
+                'accelerator', 'logger', 
+                'training_step_func', 'validation_step_func', 
+                'callback_train_epoch_end', 'callback_eval_epoch_end'
+            ):
+                continue
+            if hasattr(v, 'state_dict'):
+                state_dict[k] = v.state_dict()
+            elif not callable(v) and not k.startswith('_'):
+                # check if the attribute is serializable
+                state_dict[k] = v
+        return state_dict
+
+    def save_ckpt(self, prefix: str, eval_loss=None, **kwargs):
         '''
         Save the checkpoint file with the given prefix and epoch number.
 
         Args:
             prefix (str): The prefix of the checkpoint file name.
             epoch (int, optional): The epoch number. Defaults to None.
-            local_steps (int, optional): The local steps. Defaults to None.
             eval_loss ([type], optional): The evaluation loss. Defaults to None.
         '''
+        if self.accelerator:
+            if not self.accelerator.is_main_process:
+                return
+            self.accelerator.wait_for_everyone()
+
         if self.save_ckpt_path is None:
             return
 
-        state_dict = {
-            'local_steps': local_steps,
-            'eval_loss': eval_loss,
-            'model': self.model,
-            'optimizer': self.optimizer,
-            'lr_scheduler': self.lr_scheduler,
-            **kwargs
-        }
-
-        # save all the other serializable attributes in __init__ function if not exist in save_dict
-        for k, v in self.__dict__.items():
-            # check if the attribute is serializable
-            if k not in state_dict and not callable(v) and not k.startswith('_'):
-                state_dict[k] = v
-
+        state_dict = self.get_state_dict(**kwargs)
         torch.save(state_dict, f'{self.save_ckpt_path}/{prefix}.{self.global_steps:06}.ckpt')
 
         def _update_metadata():
@@ -313,8 +325,8 @@ class Trainer:
 
             metadata.update({
                 'global_steps': self.global_steps,
+                'local_steps': self.local_steps,
                 'last_ckpt': f'{prefix}.{self.global_steps:06}.ckpt',
-                'local_steps': local_steps,
                 'eval_loss': eval_loss
             })
             
@@ -361,7 +373,7 @@ class Trainer:
                 else:
                     return None
         
-        ckpt = torch.load(ckpt_file, weights_only=False)
+        ckpt = torch.load(ckpt_file, weights_only=True)
 
         if exclude_keys == 'all_except_model':
             exclude_keys = set(ckpt.keys()) - set(['model',])
@@ -372,27 +384,21 @@ class Trainer:
         for k, v in ckpt.items():
             if k in exclude_keys:
                 continue
-            elif k in ['model', ]:
-                model = eval(f'self.{k}')
-                if model is None:
-                    model = v
-                    continue
-
-                # check the state_dict consistency
-                model.load_state_dict(v.state_dict())
-                self.logger.info(f'Loaded {k} state_dict from checkpoint.')
-
-                # load the other attributes in the model
-                for mk, mv in v.__dict__.items():
-                    if mk not in model.__dict__ or callable(mv) or mk.startswith('_') or mk in ['state_dict',]:
-                        continue
-                    setattr(model, mk, mv)
-                    self.logger.info(f'Loaded {k}.{mk} from checkpoint.')
+            elif k in ['model', 'optimizer', 'lr_scheduler']:
+                restore = eval(f'self.{k}')
+                if restore is None:
+                    self.logger.warning(f'{restore} restored failed from checkpoint as it is not initialized in the trainer.')
+                self.logger.info(f'Loading {k} state_dict from checkpoint.')
+                restore.load_state_dict(v)
             elif k in self.__dict__:
-                self.__dict__[k] = v
-                # print it if v is not long
-                str_v = str(v) if len(str(v)) < 100 else (str(v)[:100] + '...')
-                self.logger.info(f'Loaded {k} = {str_v} from checkpoint.')
+                if hasattr(self.__dict__[k], 'load_state_dict'):
+                    self.logger.info(f'Loading {k} state_dict from checkpoint.')
+                    self.__dict__[k].load_state_dict(v)
+                else:
+                    # print it if v is not long
+                    str_v = str(v) if len(str(v)) < 100 else (str(v)[:100] + '...')
+                    self.logger.info(f'Loading {k} = {str_v} from checkpoint.')                    
+                    self.__dict__[k] = v
 
         self.logger.info(f'Checkpoint loaded from {ckpt_file}.')
 
