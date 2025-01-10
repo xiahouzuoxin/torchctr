@@ -108,13 +108,20 @@ class Trainer:
         else:
             self.accelerator = None
 
-    def collect_loss(self, step_func_ret, accumulates: list=None):
+    def collect_loss(self, cur_step_ret, step_rets: list=None):
         '''
         Collect the loss from the step function return value.
         The first element of the return value must be the loss tensor when it is a list or tuple.
+
+        Args:
+            cur_step_ret: The return value of the step function of the current step.
+            step_rets (list): The list of step return values, including the historical steps if provided. Defaults to None.
+
+        Returns:
+            The loss and the list of step return values with the current step appended.
         '''
-        if accumulates is None:
-            accumulates = []
+        if step_rets is None:
+            step_rets = []
 
         def detach_tensor(v):
             if isinstance(v, torch.Tensor):
@@ -124,34 +131,39 @@ class Trainer:
                     v = v.detach().cpu().numpy()
             return v
 
-        if isinstance(step_func_ret, dict):
-            accumulates.append( {n: detach_tensor(v) for n,v in step_func_ret.items()} )
-            backable_loss = step_func_ret['loss']
-        elif isinstance(step_func_ret, (list, tuple)): 
-            accumulates.append( type(step_func_ret)([detach_tensor(v) for v in step_func_ret]) )
-            backable_loss = step_func_ret[0]
+        if isinstance(cur_step_ret, dict):
+            step_rets.append( {n: detach_tensor(v) for n,v in cur_step_ret.items()} )
+            loss = cur_step_ret['loss']
+        elif isinstance(cur_step_ret, (list, tuple)): 
+            step_rets.append( type(cur_step_ret)([detach_tensor(v) for v in cur_step_ret]) )
+            loss = cur_step_ret[0]
         else:
-            accumulates.append( detach_tensor(step_func_ret) )
-            backable_loss = step_func_ret
+            step_rets.append( detach_tensor(cur_step_ret) )
+            loss = cur_step_ret
         
-        return backable_loss, accumulates
+        return loss, step_rets
     
-    def getstat_lastn_accumulates(self, accumulates: list, n: int=0, agg='mean'):
+    def stat_tail_steps(self, step_rets: list, n: int=0, agg='mean'):
         '''
-        Get the statistics of the last n elements of the accumulates.
+        Get the statistics of the last/tail n elements of the step_rets.
+
+        Args:
+            step_rets (list): The list of step return values.
+            n (int, optional): The number of tail elements to aggregate. Defaults to 0 means all elements.
+            agg (str, optional): The aggregation function. Can be 'mean' or 'sum'. Defaults to 'mean'.
         '''
-        lastn = accumulates[-n:] if n > 0 else accumulates
+        tail = step_rets[-n:] if n > 0 else step_rets
         agg_func = np.sum if agg == 'sum' else np.mean
-        if isinstance(lastn[0], dict):
-            lastn_agg = {k: agg_func([v[k] for v in lastn]).item() for k in lastn[0].keys()}
-            final_loss = lastn_agg['loss']
-        elif isinstance(lastn[0], (list, tuple)):
-            lastn_agg = type(lastn[0])([agg_func([v[i] for v in lastn]).item() for i in range(len(lastn[0]))])
-            final_loss = lastn_agg[0]
+        if isinstance(tail[0], dict):
+            tail_agg = {k: agg_func([v[k] for v in tail]).item() for k in tail[0].keys()}
+            loss = tail_agg['loss']
+        elif isinstance(tail[0], (list, tuple)):
+            tail_agg = type(tail[0])([agg_func([v[i] for v in tail]).item() for i in range(len(tail[0]))])
+            loss = tail_agg[0]
         else:
-            lastn_agg = agg_func(lastn).item()
-            final_loss = lastn_agg
-        return final_loss, lastn_agg
+            tail_agg = agg_func(tail).item()
+            loss = tail_agg
+        return loss, tail_agg
 
     def evaluate_model(self, model, eval_dataloader):
         if eval_dataloader is None or model is None or self.validation_step_func is None:
@@ -159,15 +171,15 @@ class Trainer:
         
         with torch.no_grad():
             model.eval()
-            eval_loss = []
+            eval_rets = []
 
             for k, batch in enumerate(eval_dataloader):
                 val_ret = self.validation_step_func(batch, k)
-                _, eval_loss = self.collect_loss(val_ret, eval_loss)
+                _, eval_rets = self.collect_loss(val_ret, eval_rets)
 
             if self.callback_eval_epoch_end:
-                self.callback_eval_epoch_end(eval_loss)
-        return eval_loss
+                self.callback_eval_epoch_end(eval_rets)
+        return eval_rets
 
     def fit(self, 
             train_dataloader: torch.utils.data.DataLoader,
@@ -192,20 +204,20 @@ class Trainer:
         if self.accelerator:
             train_dataloader, eval_dataloader = self.accelerator.prepare(train_dataloader, eval_dataloader)
 
-        final_eval_losses = []
+        eval_losses = []
         
         if init_ckpt_path:
             self.load_ckpt(init_ckpt_path, exclude_keys=init_ckpt_exclude_keys)
-            eval_loss = self.evaluate_model(self.model, eval_dataloader)
-            final_loss, eval_loss = self.getstat_lastn_accumulates(eval_loss, n=len(eval_dataloader), agg='mean')
-            self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
-            final_eval_losses.append(final_loss)
+            eval_rets = self.evaluate_model(self.model, eval_dataloader)
+            eval_loss, eval_stats = self.stat_tail_steps(eval_rets, n=len(eval_dataloader), agg='mean')
+            self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
+            eval_losses.append(eval_loss)
 
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
             
             self.model.train()
-            train_loss = []
+            train_rets = []
 
             # print the latest learning rate of lr_scheduler
             for k, param_group in enumerate(self.optimizer.param_groups):
@@ -217,7 +229,7 @@ class Trainer:
                 train_ret = self.training_step_func(batch, k)
 
                 # accumulate losses and compute gradients
-                loss, train_loss = self.collect_loss(train_ret, train_loss)
+                loss, train_rets = self.collect_loss(train_ret, train_rets)
 
                 if self.accelerator:
                     self.accelerator.backward(loss)
@@ -231,33 +243,33 @@ class Trainer:
                 self.local_steps += 1
 
                 if k % self.log_steps == 0:
-                    _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.log_steps)
+                    _, latest_loss = self.stat_tail_steps(train_rets, n=self.log_steps)
                     self.logger.info(f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_loss}')
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
-                    _, latest_loss = self.getstat_lastn_accumulates(train_loss, n=self.save_ckpt_steps)
+                    _, latest_loss = self.stat_tail_steps(train_rets, n=self.save_ckpt_steps)
                     self.save_ckpt(self.ckpt_file_prefix, eval_loss=None, train_loss=latest_loss)
                     
             if self.callback_train_epoch_end:
-                self.callback_train_epoch_end(train_loss)
+                self.callback_train_epoch_end(train_rets)
 
             if self.accelerator:
                 self.accelerator.wait_for_everyone()
 
-            eval_loss_batches = self.evaluate_model(self.model, eval_dataloader)
-            final_eval_loss, eval_loss = self.getstat_lastn_accumulates(eval_loss_batches, n=len(eval_dataloader), agg='mean')
-            self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_loss}')
+            eval_rets = self.evaluate_model(self.model, eval_dataloader)
+            eval_loss, eval_stats = self.stat_tail_steps(eval_rets, n=len(eval_dataloader), agg='mean')
+            self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
 
             if self.save_ckpt_steps == 'epoch':
-                self.save_ckpt(self.ckpt_file_prefix, eval_loss=final_eval_loss)
+                self.save_ckpt(self.ckpt_file_prefix, eval_loss=eval_loss)
 
-            if self.early_stopping_rounds and eval_loss is not None:
-                if len(final_eval_losses) >= self.early_stopping_rounds:
-                    eval_loss_his_avg = np.mean( final_eval_losses[-self.early_stopping_rounds:] )
-                    if final_eval_loss > eval_loss_his_avg:
+            if eval_loss is not None:
+                if self.early_stopping_rounds and len(eval_losses) >= self.early_stopping_rounds:
+                    eval_loss_his_avg = np.mean( eval_losses[-self.early_stopping_rounds:] )
+                    if eval_loss > eval_loss_his_avg:
                         self.logger.info(f'Early stopping at epoch {self.num_epoch}...')
                         break
-            final_eval_losses.append(final_eval_loss)
+                eval_losses.append(eval_loss)
 
         if ret_model == 'best':
             self.load_ckpt(self.save_ckpt_path, ret_best=True)
@@ -276,8 +288,10 @@ class Trainer:
         # save all the other serializable attributes in __init__ function
         other_states = kwargs
         other_states.update(self.__dict__)
-        if hasattr(self.model, 'feat_configs'):
-            other_states['feat_configs'] = self.model.feat_configs
+        # save member attributes of the model
+        for k, v in self.model.__dict__.items():
+            if not callable(v) and not k.startswith('_'):
+                other_states['model.' + k] = v
         for k, v in other_states.items():
             if k in state_dict or k in (
                 'accelerator', 'logger', 
@@ -377,14 +391,12 @@ class Trainer:
         
         ckpt = torch.load(ckpt_file, weights_only=True)
 
-        if exclude_keys == 'all_except_model':
-            exclude_keys = set(ckpt.keys()) - set(['model',])
-        else:
-            exclude_keys = set([]) if exclude_keys is None else set(exclude_keys) 
-        
+        exclude_keys = set([]) if exclude_keys is None else set(exclude_keys)
         # load all the serializable attributes in the checkpoint file
         for k, v in ckpt.items():
             if k in exclude_keys:
+                continue
+            if exclude_keys == 'all_except_model' and (k == 'model' or k.startswith('model.')):
                 continue
             elif k in ['model', 'optimizer', 'lr_scheduler']:
                 restore = eval(f'self.{k}')
@@ -401,9 +413,9 @@ class Trainer:
                     str_v = str(v) if len(str(v)) < 100 else (str(v)[:100] + '...')
                     self.logger.info(f'Loading {k} = {str_v} from checkpoint.')                    
                     self.__dict__[k] = v
-            elif k in ['feat_configs']:
+            elif k.startswith('model.'):
                 self.logger.info(f'Loading {k} from checkpoint.')
-                self.model.feat_configs = v
+                setattr(self.model, k[6:], v)
 
         self.logger.info(f'Checkpoint loaded from {ckpt_file}.')
 
