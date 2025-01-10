@@ -5,6 +5,7 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.tensorboard import SummaryWriter
 
 from .utils import logger, get_logger
 
@@ -23,13 +24,14 @@ class Trainer:
                  save_ckpt_path=None,
                  save_ckpt_steps='epoch',
                  ckpt_file_prefix='checkpoint',
-                 logger=logger,
-                 log_steps=100,
                  training_step_func = None,
                  validation_step_func = None,
                  callback_train_epoch_end = None,
                  callback_eval_epoch_end = None,
                  use_accelerate=has_accelerate,
+                 logger=logger,
+                 log_steps=100,
+                 tb_writer: SummaryWriter=None,
                  **kwargs):
         """
         Initializes the Trainer object.
@@ -43,13 +45,16 @@ class Trainer:
             save_ckpt_path (str, optional): The path to save the checkpoint files. Defaults to None.
             save_ckpt_steps (str, optional): The steps to save the checkpoint files. Can be 'epoch' or int value. Defaults to 'epoch'.
             ckpt_file_prefix (str, optional): The prefix of the checkpoint file name. Defaults to 'checkpoint'.
-            logger ([type], optional): The logger object. Defaults to logger.
             training_step_func (batch, batch_idx): The training step function. Defaults to use the model's `training_step` method.
             validation_step_func (batch, batch_idx): The validation step function. Defaults to use the model's `validation_step` method.
             callback_train_epoch_end (list): callback functions to be called at the end of each training epoch. 
                 Input is a list returns of the `training_step_func`. It helps to calculate the metrics when returns training_step_func contains predictions.
             callback_eval_epoch_end (list): callback functions to be called at the end of each evaluation epoch. 
                 Input is a list returns of the validation_step_func. It helps to calculate the metrics when returns validation_step_func contains predictions.
+            use_accelerate (bool, optional): Whether to use the accelerate library for distributed training. Defaults to has_accelerate.
+            logger (logging.Logger, optional): The logger object. Defaults to logger.
+            log_steps (int, optional): The steps to log the training loss. Defaults to 100.
+            tb_writer (SummaryWriter, optional): The tensorboard writer object. Defaults to None.
         """
         self.model = model
         self.optimizer = optimizer
@@ -107,6 +112,10 @@ class Trainer:
             self.logger = get_logger('Trainer', level='INFO', use_accelerate=True)
         else:
             self.accelerator = None
+
+        self.tb_writer = tb_writer
+        if self.tb_writer == True: # initialize a default tensorboard writer
+            self.tb_writer = SummaryWriter()
 
     def collect_loss(self, cur_step_ret, step_rets: list=None):
         '''
@@ -177,6 +186,22 @@ class Trainer:
                 val_ret = self.validation_step_func(batch, k)
                 _, eval_rets = self.collect_loss(val_ret, eval_rets)
 
+            if self.tb_writer:
+                if isinstance(eval_rets[0], dict):
+                    for n, v in eval_rets[0].items():
+                        self.tb_writer.add_scalar(
+                            f'Validation Loss/{n}', v, self.global_steps
+                        )
+                elif isinstance(eval_rets[0], (list, tuple)):
+                    for i, v in enumerate(eval_rets[0]):
+                        self.tb_writer.add_scalar(
+                            f'Validation Loss/{i}', v, self.global_steps
+                        )
+                else:
+                    self.tb_writer.add_scalar(
+                        'Validation Loss', eval_rets[0], self.global_steps
+                    )
+
             if self.callback_eval_epoch_end:
                 self.callback_eval_epoch_end(eval_rets)
         return eval_rets
@@ -199,7 +224,6 @@ class Trainer:
 
         Returns:
             The trained model.
-
         """
         if self.accelerator:
             train_dataloader, eval_dataloader = self.accelerator.prepare(train_dataloader, eval_dataloader)
@@ -213,6 +237,16 @@ class Trainer:
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
             eval_losses.append(eval_loss)
 
+        if self.tb_writer:
+            try:
+                guess_input = next(iter(train_dataloader))
+                if isinstance(guess_input, (list, tuple)):
+                    guess_input = guess_input[0]
+                self.tb_writer.add_graph(self.model, guess_input)
+                del guess_input
+            except Exception as e:
+                self.logger.warning(f'Failed to add graph to tensorboard: {e}')
+
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
             
@@ -222,6 +256,10 @@ class Trainer:
             # print the latest learning rate of lr_scheduler
             for k, param_group in enumerate(self.optimizer.param_groups):
                 self.logger.info(f'Learning rate of group {k}: {param_group["lr"]}')
+                if self.tb_writer:
+                    self.tb_writer.add_scalar(
+                        f'Learning rate/group{k}', param_group['lr'], self.global_steps
+                    )
         
             # Training 
             for k, batch in enumerate(train_dataloader):
@@ -239,16 +277,38 @@ class Trainer:
                 self.optimizer.step()       # adjust parameters based on the calculated gradients 
                 if self.lr_scheduler:
                     self.lr_scheduler.step()
+                    if self.tb_writer:
+                        for k, param_group in enumerate(self.optimizer.param_groups):
+                            self.tb_writer.add_scalar(
+                                f'Learning rate/group{k}', param_group['lr'], self.global_steps
+                            )
                 self.global_steps += 1
                 self.local_steps += 1
 
                 if k % self.log_steps == 0:
-                    _, latest_loss = self.stat_tail_steps(train_rets, n=self.log_steps)
-                    self.logger.info(f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_loss}')
+                    _, latest_stats = self.stat_tail_steps(train_rets, n=self.log_steps)
+                    self.logger.info(
+                        f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_stats}'
+                    )
+                    if self.tb_writer:
+                        if isinstance(latest_stats, dict):
+                            for n, v in latest_stats.items():
+                                self.tb_writer.add_scalar(
+                                    f'Training Loss/{n}', v, self.global_steps
+                                )
+                        elif isinstance(latest_stats, (list, tuple)):
+                            for i, v in enumerate(latest_stats):
+                                self.tb_writer.add_scalar(
+                                    f'Training Loss/{i}', v, self.global_steps
+                                )
+                        else:
+                            self.tb_writer.add_scalar(
+                                'Training Loss', latest_stats, self.global_steps
+                            )
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
-                    _, latest_loss = self.stat_tail_steps(train_rets, n=self.save_ckpt_steps)
-                    self.save_ckpt(self.ckpt_file_prefix, eval_loss=None, train_loss=latest_loss)
+                    _, latest_stats = self.stat_tail_steps(train_rets, n=self.save_ckpt_steps)
+                    self.save_ckpt(self.ckpt_file_prefix, eval_loss=None, train_loss=latest_stats)
                     
             if self.callback_train_epoch_end:
                 self.callback_train_epoch_end(train_rets)
@@ -294,7 +354,7 @@ class Trainer:
                 other_states['model.' + k] = v
         for k, v in other_states.items():
             if k in state_dict or k in (
-                'accelerator', 'logger', 
+                'accelerator', 'logger', 'tb_writer',
                 'training_step_func', 'validation_step_func', 
                 'callback_train_epoch_end', 'callback_eval_epoch_end'
             ):
