@@ -239,7 +239,7 @@ class Trainer:
 
             # print the latest learning rate of lr_scheduler
             for i, param_group in enumerate(self.optimizer.param_groups):
-                self.logger.info(f'Learning rate of group {k}: {param_group["lr"]}')
+                self.logger.info(f'Learning rate of group {i}: {param_group["lr"]}')
                 if self.tb_writer:
                     self.tb_writer.add_scalar(
                         f'Learning rate/group{i}', param_group['lr'], self.global_steps
