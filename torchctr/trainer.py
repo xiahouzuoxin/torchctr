@@ -186,22 +186,6 @@ class Trainer:
                 val_ret = self.validation_step_func(batch, k)
                 _, eval_rets = self.collect_loss(val_ret, eval_rets)
 
-            if self.tb_writer:
-                if isinstance(eval_rets[0], dict):
-                    for n, v in eval_rets[0].items():
-                        self.tb_writer.add_scalar(
-                            f'Validation Loss/{n}', v, self.global_steps
-                        )
-                elif isinstance(eval_rets[0], (list, tuple)):
-                    for i, v in enumerate(eval_rets[0]):
-                        self.tb_writer.add_scalar(
-                            f'Validation Loss/{i}', v, self.global_steps
-                        )
-                else:
-                    self.tb_writer.add_scalar(
-                        'Validation Loss', eval_rets[0], self.global_steps
-                    )
-
             if self.callback_eval_epoch_end:
                 self.callback_eval_epoch_end(eval_rets)
         return eval_rets
@@ -242,9 +226,7 @@ class Trainer:
                 guess_input = next(iter(train_dataloader))
                 if isinstance(guess_input, (list, tuple)):
                     guess_input = guess_input[:-1] # assume the last one is target
-                elif isinstance(guess_input, dict):
-                    guess_input = (guess_input, )
-                self.tb_writer.add_graph(self.model, guess_input)
+                self.tb_writer.add_graph(self.model, guess_input, use_strict_trace=False)
                 del guess_input
             except Exception as e:
                 self.logger.warning(f'Failed to add graph to tensorboard.')
@@ -256,11 +238,11 @@ class Trainer:
             train_rets = []
 
             # print the latest learning rate of lr_scheduler
-            for k, param_group in enumerate(self.optimizer.param_groups):
+            for i, param_group in enumerate(self.optimizer.param_groups):
                 self.logger.info(f'Learning rate of group {k}: {param_group["lr"]}')
                 if self.tb_writer:
                     self.tb_writer.add_scalar(
-                        f'Learning rate/group{k}', param_group['lr'], self.global_steps
+                        f'Learning rate/group{i}', param_group['lr'], self.global_steps
                     )
         
             # Training 
@@ -294,15 +276,10 @@ class Trainer:
                     )
                     if self.tb_writer:
                         if isinstance(latest_stats, dict):
-                            for n, v in latest_stats.items():
-                                self.tb_writer.add_scalar(
-                                    f'Training Loss/{n}', v, self.global_steps
-                                )
+                            self.tb_writer.add_scalars('Training Loss', latest_stats, self.global_steps)
                         elif isinstance(latest_stats, (list, tuple)):
                             for i, v in enumerate(latest_stats):
-                                self.tb_writer.add_scalar(
-                                    f'Training Loss/{i}', v, self.global_steps
-                                )
+                                self.tb_writer.add_scalar(f'Training Loss/{i}', v, self.global_steps)
                         else:
                             self.tb_writer.add_scalar(
                                 'Training Loss', latest_stats, self.global_steps
@@ -321,6 +298,14 @@ class Trainer:
             eval_rets = self.evaluate_model(self.model, eval_dataloader)
             eval_loss, eval_stats = self.stat_tail_steps(eval_rets, n=len(eval_dataloader), agg='mean')
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
+            if self.tb_writer:
+                if isinstance(eval_stats, dict):
+                    self.tb_writer.add_scalars('Validation Loss', eval_stats, self.global_steps)
+                elif isinstance(eval_stats, (list, tuple)):
+                    for i, v in enumerate(eval_stats):
+                        self.tb_writer.add_scalar(f'Validation Loss/{i}', v, self.global_steps)
+                else:
+                    self.tb_writer.add_scalar('Validation Loss', eval_stats, self.global_steps)
 
             if self.save_ckpt_steps == 'epoch':
                 self.save_ckpt(self.ckpt_file_prefix, eval_loss=eval_loss)
