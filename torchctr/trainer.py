@@ -190,6 +190,37 @@ class Trainer:
                 self.callback_eval_epoch_end(eval_rets)
         return eval_rets
 
+    def tensorboard_log(self, tag, value, global_steps):
+        ''' Log the step return statistics to tensorboard.
+        '''
+        if not self.tb_writer:
+            return
+        
+        if tag.lower() in ('training loss', 'validation loss', 'loss'):
+            # value is the stat of the step return values
+            if isinstance(value, dict):
+                self.tb_writer.add_scalars(tag, value, global_steps)
+            elif isinstance(value, (list, tuple)):
+                for i, v in enumerate(value):
+                    self.tb_writer.add_scalar(f'{tag}/{i}/mean', v, global_steps)
+            else:
+                self.tb_writer.add_scalar(tag, value, global_steps)
+        elif tag.lower() in ('learning rate', 'lr'):
+            # value is the learning rate dict of all groups
+            self.tb_writer.add_scalars(tag, value, global_steps)
+        elif tag == 'graph':
+            # value is train_dataloader
+            try:
+                guess_input = next(iter(value))
+                if isinstance(guess_input, (list, tuple)) and len(guess_input) > 1:
+                    guess_input = guess_input[:-1] # assume the last one is target
+                    if len(guess_input) == 1:
+                        guess_input = guess_input[0]
+                if isinstance(guess_input, (torch.Tensor, list, tuple)):
+                    self.tb_writer.add_graph(self.model, guess_input)
+            except Exception as e:
+                self.logger.warning(f'Add graph to tensorboard failed: {e}')
+
     def fit(self, 
             train_dataloader: torch.utils.data.DataLoader,
             eval_dataloader: torch.utils.data.DataLoader = None,
@@ -221,15 +252,7 @@ class Trainer:
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
             eval_losses.append(eval_loss)
 
-        if self.tb_writer:
-            try:
-                guess_input = next(iter(train_dataloader))
-                if isinstance(guess_input, (list, tuple)):
-                    guess_input = guess_input[:-1] # assume the last one is target
-                self.tb_writer.add_graph(self.model, guess_input, use_strict_trace=False)
-                del guess_input
-            except Exception as e:
-                self.logger.warning(f'Failed to add graph to tensorboard.')
+        self.tensorboard_log('graph', train_dataloader, self.global_steps)
 
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
@@ -238,12 +261,12 @@ class Trainer:
             train_rets = []
 
             # print the latest learning rate of lr_scheduler
-            for i, param_group in enumerate(self.optimizer.param_groups):
-                self.logger.info(f'Learning rate of group {i}: {param_group["lr"]}')
-                if self.tb_writer:
-                    self.tb_writer.add_scalar(
-                        f'Learning rate/group{i}', param_group['lr'], self.global_steps
-                    )
+            learning_rates = {
+                f'group{i}': param_group['lr'] 
+                for i, param_group in enumerate(self.optimizer.param_groups)
+            }
+            self.logger.info(f'Learning rate: {learning_rates}')
+            self.tensorboard_log('Learning rate', learning_rates, self.global_steps)
         
             # Training 
             for k, batch in enumerate(train_dataloader):
@@ -261,29 +284,24 @@ class Trainer:
                 self.optimizer.step()       # adjust parameters based on the calculated gradients 
                 if self.lr_scheduler:
                     self.lr_scheduler.step()
-                    if self.tb_writer:
-                        for i, param_group in enumerate(self.optimizer.param_groups):
-                            self.tb_writer.add_scalar(
-                                f'Learning rate/group{i}', param_group['lr'], self.global_steps
-                            )
+
                 self.global_steps += 1
                 self.local_steps += 1
+
+                if self.lr_scheduler:
+                    learning_rates = {
+                        f'group{i}': param_group['lr'] 
+                        for i, param_group in enumerate(self.optimizer.param_groups)
+                    }
+                    self.logger.info(f'Learning rate: {learning_rates}')
+                    self.tensorboard_log('Learning rate', learning_rates, self.global_steps)
 
                 if k % self.log_steps == 0:
                     _, latest_stats = self.stat_tail_steps(train_rets, n=self.log_steps)
                     self.logger.info(
                         f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_stats}'
                     )
-                    if self.tb_writer:
-                        if isinstance(latest_stats, dict):
-                            self.tb_writer.add_scalars('Training Loss', latest_stats, self.global_steps)
-                        elif isinstance(latest_stats, (list, tuple)):
-                            for i, v in enumerate(latest_stats):
-                                self.tb_writer.add_scalar(f'Training Loss/{i}', v, self.global_steps)
-                        else:
-                            self.tb_writer.add_scalar(
-                                'Training Loss', latest_stats, self.global_steps
-                            )
+                    self.tensorboard_log('Training Loss', latest_stats, self.global_steps)
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
                     _, latest_stats = self.stat_tail_steps(train_rets, n=self.save_ckpt_steps)
@@ -298,14 +316,7 @@ class Trainer:
             eval_rets = self.evaluate_model(self.model, eval_dataloader)
             eval_loss, eval_stats = self.stat_tail_steps(eval_rets, n=len(eval_dataloader), agg='mean')
             self.logger.info(f'[Validation] Epoch: {self.num_epoch}/{self.max_epochs}, Validation Loss: {eval_stats}')
-            if self.tb_writer:
-                if isinstance(eval_stats, dict):
-                    self.tb_writer.add_scalars('Validation Loss', eval_stats, self.global_steps)
-                elif isinstance(eval_stats, (list, tuple)):
-                    for i, v in enumerate(eval_stats):
-                        self.tb_writer.add_scalar(f'Validation Loss/{i}', v, self.global_steps)
-                else:
-                    self.tb_writer.add_scalar('Validation Loss', eval_stats, self.global_steps)
+            self.tensorboard_log('Validation Loss', eval_stats, self.global_steps)
 
             if self.save_ckpt_steps == 'epoch':
                 self.save_ckpt(self.ckpt_file_prefix, eval_loss=eval_loss)
