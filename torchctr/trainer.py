@@ -282,19 +282,6 @@ class Trainer:
                     loss.backward()             # compute gradients
                 
                 self.optimizer.step()       # adjust parameters based on the calculated gradients 
-                if self.lr_scheduler:
-                    self.lr_scheduler.step()
-
-                self.global_steps += 1
-                self.local_steps += 1
-
-                if self.lr_scheduler:
-                    learning_rates = {
-                        f'group{i}': param_group['lr'] 
-                        for i, param_group in enumerate(self.optimizer.param_groups)
-                    }
-                    self.logger.info(f'Learning rate: {learning_rates}')
-                    self.tensorboard_log('Learning rate', learning_rates, self.global_steps)
 
                 if k % self.log_steps == 0:
                     _, latest_stats = self.stat_tail_steps(train_rets, n=self.log_steps)
@@ -302,10 +289,20 @@ class Trainer:
                         f'[Training] Epoch: {self.num_epoch}/{self.max_epochs} iter {k}/{len(train_dataloader)}, Training Loss: {latest_stats}'
                     )
                     self.tensorboard_log('Training Loss', latest_stats, self.global_steps)
+                    learning_rates = {
+                        f'group{i}': param_group['lr'] 
+                        for i, param_group in enumerate(self.optimizer.param_groups)
+                    }
+                    self.tensorboard_log('Learning rate', learning_rates, self.global_steps)
 
                 if isinstance(self.save_ckpt_steps, int) and self.global_steps % self.save_ckpt_steps == 0:
                     _, latest_stats = self.stat_tail_steps(train_rets, n=self.save_ckpt_steps)
                     self.save_ckpt(self.ckpt_file_prefix, eval_loss=None, train_loss=latest_stats)
+
+                self.global_steps += 1
+                self.local_steps += 1
+                if self.lr_scheduler:
+                    self.lr_scheduler.step()
                     
             if self.callback_train_epoch_end:
                 self.callback_train_epoch_end(train_rets)
