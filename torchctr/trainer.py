@@ -241,11 +241,13 @@ class Trainer:
             try:
                 guess_input = next(iter(train_dataloader))
                 if isinstance(guess_input, (list, tuple)):
-                    guess_input = guess_input[0]
+                    guess_input = guess_input[:-1] # assume the last one is target
+                elif isinstance(guess_input, dict):
+                    guess_input = (guess_input, )
                 self.tb_writer.add_graph(self.model, guess_input)
                 del guess_input
             except Exception as e:
-                self.logger.warning(f'Failed to add graph to tensorboard: {e}')
+                self.logger.warning(f'Failed to add graph to tensorboard.')
 
         while self.num_epoch < self.max_epochs:
             self.num_epoch += 1
@@ -278,9 +280,9 @@ class Trainer:
                 if self.lr_scheduler:
                     self.lr_scheduler.step()
                     if self.tb_writer:
-                        for k, param_group in enumerate(self.optimizer.param_groups):
+                        for i, param_group in enumerate(self.optimizer.param_groups):
                             self.tb_writer.add_scalar(
-                                f'Learning rate/group{k}', param_group['lr'], self.global_steps
+                                f'Learning rate/group{i}', param_group['lr'], self.global_steps
                             )
                 self.global_steps += 1
                 self.local_steps += 1
