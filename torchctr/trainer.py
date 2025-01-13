@@ -1,3 +1,4 @@
+import inspect
 import os
 import numpy as np
 import json
@@ -5,15 +6,22 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.tensorboard import SummaryWriter
 
 from .utils import logger, get_logger
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    has_tensorboard = True
+except ImportError:
+    has_tensorboard = False
+    logger.warning('Tensorboard is not available. Please install it with `pip install tensorboard`.')
 
 try:
     from accelerate import Accelerator
     has_accelerate = True
 except ImportError:
     has_accelerate = False
+    logger.warning('Accelerate is not available. Please install it with `pip install accelerate`.')
 
 class Trainer:
     def __init__(self, model: nn.Module, 
@@ -31,7 +39,7 @@ class Trainer:
                  use_accelerate=has_accelerate,
                  logger=logger,
                  log_steps=100,
-                 tb_writer: SummaryWriter=None,
+                 tb_writer=None,
                  **kwargs):
         """
         Initializes the Trainer object.
@@ -54,7 +62,7 @@ class Trainer:
             use_accelerate (bool, optional): Whether to use the accelerate library for distributed training. Defaults to has_accelerate.
             logger (logging.Logger, optional): The logger object. Defaults to logger.
             log_steps (int, optional): The steps to log the training loss. Defaults to 100.
-            tb_writer (SummaryWriter, optional): The tensorboard writer object. Defaults to None.
+            tb_writer (torch.utils.tensorboard.SummaryWriter, optional): The tensorboard writer object. Defaults to None.
         """
         self.model = model
         self.optimizer = optimizer
@@ -104,6 +112,12 @@ class Trainer:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+        if has_tensorboard:
+            tb_writer = SummaryWriter() if tb_writer == True else tb_writer
+        self.tb_writer = tb_writer
+        if self.tb_writer:
+            self.logger.info(f'Tensorboard writer initialized at {self.tb_writer.log_dir}')
+
         if use_accelerate:
             self.accelerator = Accelerator()
             self.logger.info(f'Accelerate device: {self.accelerator.device}')
@@ -112,10 +126,6 @@ class Trainer:
             self.logger = get_logger('Trainer', level='INFO', use_accelerate=True)
         else:
             self.accelerator = None
-
-        self.tb_writer = tb_writer
-        if self.tb_writer == True: # initialize a default tensorboard writer
-            self.tb_writer = SummaryWriter()
 
     def collect_loss(self, cur_step_ret, step_rets: list=None):
         '''
@@ -211,13 +221,13 @@ class Trainer:
         elif tag == 'graph':
             # value is train_dataloader
             try:
+                # get the number of input parameters of self.model
                 guess_input = next(iter(value))
-                if isinstance(guess_input, (list, tuple)) and len(guess_input) > 1:
-                    guess_input = guess_input[:-1] # assume the last one is target
-                    if len(guess_input) == 1:
-                        guess_input = guess_input[0]
-                if isinstance(guess_input, (torch.Tensor, list, tuple)):
-                    self.tb_writer.add_graph(self.model, guess_input)
+                if isinstance(guess_input, (list, tuple)):
+                    forward_params = inspect.signature(self.model.forward).parameters
+                    guess_input = guess_input[:len(forward_params)]
+                self.tb_writer.add_graph(self.model, guess_input)
+                self.logger.info('Add graph to tensorboard successfully.')
             except Exception as e:
                 self.logger.warning(f'Add graph to tensorboard failed: {e}')
 
@@ -345,7 +355,7 @@ class Trainer:
         other_states.update(self.__dict__)
         # save member attributes of the model
         for k, v in self.model.__dict__.items():
-            if not callable(v) and not k.startswith('_'):
+            if not callable(v) and not k.startswith('_') and k not in ('training', ):
                 other_states['model.' + k] = v
         for k, v in other_states.items():
             if k in state_dict or k in (
