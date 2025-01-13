@@ -10,7 +10,7 @@ def get_dataloader(ds: datasets.Dataset,
                     list_padding_maxlen=256,
                     **kwargs):
     '''
-    Get DataLoader from parquet files.
+    Get DataLoader from huggingface datasets.Dataset object.
 
     Args:
         ds: hugingface datasets.Dataset object. Check https://huggingface.co/docs/datasets/loading#parquet to load parquet files. 
@@ -80,3 +80,78 @@ def get_dataloader(ds: datasets.Dataset,
     dl = torch.utils.data.DataLoader(ds, collate_fn=collate_fn, **kwargs)
 
     return dl
+
+def get_dataloader_from_parquets(parquet_files, feat_configs, target_cols, **kwargs):
+    '''
+    Get DataLoader from parquet files.
+
+    Args:
+        parquet_files: str or list of str, parquet file path(s)
+        feat_configs: list of dict, feature configurations for FeatureTransformer
+        target_cols: list of str, target columns
+
+    Returns:
+        DataLoader object. The batch data format is tuple(features, labels).
+        (features, labels) = (
+            {
+                'dense_features': tensor, 
+                'sparse_feature1': tensor, 
+                'sparse_feature2': tensor, 
+                'seq_sparse_feature1': tensor,
+                ...
+            },     # features
+            tensor # labels
+        )
+    '''
+    ds = datasets.load_dataset('parquet', data_files=parquet_files)
+    return get_dataloader(ds, feat_configs, target_cols, **kwargs)
+
+def get_dataloader_from_pandas(df, feat_configs, target_cols, **kwargs):
+    '''
+    Get DataLoader from pandas DataFrame.
+
+    Args:
+        df: pandas DataFrame
+        feat_configs: list of dict, feature configurations for FeatureTransformer
+        target_cols: list of str, target columns
+
+    Returns:
+        DataLoader object. The batch data format is tuple(features, labels).
+        (features, labels) = (
+            {
+                'dense_features': tensor, 
+                'sparse_feature1': tensor, 
+                'sparse_feature2': tensor, 
+                'seq_sparse_feature1': tensor,
+                ...
+            },     # features
+            tensor # labels
+        )
+    '''
+    ds = datasets.Dataset.from_pandas(df)
+    return get_dataloader(ds, feat_configs, target_cols, **kwargs)
+
+def get_dataloader_from_polars(df, feat_configs, target_cols, **kwargs):
+    '''
+    Get DataLoader from polars DataFrame.
+
+    Args:
+        df: polars DataFrame
+        feat_configs: list of dict, feature configurations for FeatureTransformer
+        target_cols: list of str, target columns
+
+    Returns:
+        DataLoader object. The batch data format is tuple(features, labels).
+        (features, labels) = (
+            {
+                'dense_features': tensor, 
+                'sparse_feature1': tensor, 
+                'sparse_feature2': tensor, 
+                'seq_sparse_feature1': tensor,
+                ...
+            },     # features
+            tensor # labels
+        )
+    '''
+    ds = datasets.Dataset.from_polars(df)
+    return get_dataloader(ds, feat_configs, target_cols, **kwargs)
