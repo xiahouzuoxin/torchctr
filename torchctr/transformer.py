@@ -505,6 +505,8 @@ class FeatureTransformer:
             assert normalize in ['std', '[0,1]'], f'Unsupported norm: {normalize}'
         assert not (bins and normalize), f'`bins` and `norm` cannot be set at the same time: {feat_config}'
 
+        s = s.cast(pl.Float32)   # make sure it's float type
+
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse' if bins else 'dense'
 
