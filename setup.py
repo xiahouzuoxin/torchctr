@@ -27,6 +27,16 @@ setup(
     url="https://github.com/xiahouzuoxin/torchctr",
     packages=find_packages(),
     install_requires=requirements,
+    extras_require={
+        'all': [
+            'accelerate>=1.2.1',
+            'scikit-learn>=1.5.1',
+            'tensorboard',
+            'uvicorn',
+            'fastapi',
+            'pydantic'
+        ]
+    },
     python_requires='>=3.10',
     classifiers=[
         'Programming Language :: Python :: 3',

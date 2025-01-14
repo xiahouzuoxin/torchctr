@@ -8,14 +8,6 @@ import json
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-# if exist sklearn then import else pass
-try:
-    from sklearn.utils import murmurhash3_32
-    from sklearn.model_selection import train_test_split, GroupShuffleSplit
-except ImportError:
-    print("sklearn not found, pass")
-    pass
-
 def get_logger(name, level=logging.INFO, use_accelerate=False):
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -39,6 +31,14 @@ def get_logger(name, level=logging.INFO, use_accelerate=False):
     return logger
 
 logger = get_logger("torchctr")
+
+try:
+    import sklearn
+    from sklearn.utils import murmurhash3_32
+    from sklearn.model_selection import train_test_split, GroupShuffleSplit
+    logger.info(f"Scikit-learn version {sklearn.__version__} is available.")
+except ImportError:
+    logger.warning('''Scikit-learn is not available. Please install it with `pip install scikit-learn`.''')
 
 def auto_generate_feature_configs(
         df: pd.DataFrame, 
@@ -105,9 +105,15 @@ def hash_bucket(v, buckets, method='murmurhash3', seed=0):
     Hash function to map a value to a hash bucket
     """
     if method == 'murmurhash3':
+        if not 'murmurhash3_32' in globals():
+            logger.warning_once("murmurhash3_32 is not available in `hash_bucket`, rolling back to sha256.")
+            method = 'sha256'
+    
+    if method == 'murmurhash3':
         hash_integer = murmurhash3_32(str(v), seed=seed, positive=True)
     else:
-        hash_object = hashlib.sha256(str(v).encode())
+        input = f'Seed{seed}:{v}'
+        hash_object = hashlib.sha256(input.encode())
         hash_digest = hash_object.hexdigest()
         hash_integer = int(hash_digest, 16)
     return hash_integer % buckets
