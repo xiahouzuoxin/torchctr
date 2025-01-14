@@ -120,6 +120,9 @@ class Trainer:
 
         if use_accelerate:
             self.accelerator = Accelerator()
+            if self.accelerator.device.type == 'cuda':
+                # set non_blocking=True for faster data transfer, also set pin_memory=True when creating DataLoader
+                self.accelerator.non_blocking = True
             self.logger.info(f'Accelerate device: {self.accelerator.device}')
             self.model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model, self.optimizer, self.lr_scheduler)
 
@@ -203,6 +206,9 @@ class Trainer:
     def tensorboard_log(self, tag, value, global_steps):
         ''' Log the step return statistics to tensorboard.
         '''
+        if self.accelerator:
+            if not self.accelerator.is_main_process:
+                return
         if not self.tb_writer:
             return
         
