@@ -633,11 +633,9 @@ class FeatureTransformer:
 
         # padding
         padding_value = feat_config.get('padding_value', self.list_padding_value)
-        if padding_value and dtype == 'category':
+        if padding_value:
             max_len = max_len or s.len().max()
-            df = pl.DataFrame({"original": s})
-            df = df.with_columns(pad_list = [0] * (max_len - pl.col('original').len()))
-            s = df.select(pl.col('original').list.concat(pl.col('pad_list'))).to_series()
+            s = s.list.concat(pl.lit(padding_value).repeat_by(max_len - s.list.len()))
         
         return s
     
