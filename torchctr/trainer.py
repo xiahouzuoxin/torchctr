@@ -18,6 +18,7 @@ except ImportError:
 
 try:
     from accelerate import Accelerator
+    from accelerate import DataLoaderConfiguration
     has_accelerate = True
 except ImportError:
     has_accelerate = False
@@ -119,10 +120,12 @@ class Trainer:
             self.logger.info(f'Tensorboard writer initialized at {self.tb_writer.log_dir}')
 
         if use_accelerate:
-            self.accelerator = Accelerator()
-            if self.accelerator.device.type == 'cuda':
+            if torch.cuda.is_available():
                 # set non_blocking=True for faster data transfer, also set pin_memory=True when creating DataLoader
-                self.accelerator.non_blocking = True
+                dataloader_config = DataLoaderConfiguration(non_blocking=True)
+            else:
+                dataloader_config = DataLoaderConfiguration()
+            self.accelerator = Accelerator(dataloader_config=dataloader_config)
             self.logger.info(f'Accelerate device: {self.accelerator.device}')
             self.model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model, self.optimizer, self.lr_scheduler)
 
