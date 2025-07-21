@@ -81,3 +81,53 @@ def pairwise_loss_with_logits(input: torch.Tensor, target: torch.Tensor, reducti
     pairwise_pseudo_labels = torch.ones_like(pairwise_input)
     rank_loss = F.binary_cross_entropy_with_logits(input=pairwise_input, target=pairwise_pseudo_labels, weight=pairwise_weight, reduction=reduction)
     return rank_loss
+
+def quantile_loss(y_pred, y_true, quantiles=0.5, normalize=True):
+    """
+    Quantile loss function.
+    Args:
+        y_pred: Predicted values.
+        y_true: True values.
+        quantiles: Quantile to compute the loss for (default is 0.5 for median).
+    Returns:
+        Computed quantile loss.
+    """
+    if not isinstance(quantiles, (list, tuple)):
+        quantiles = [quantiles]
+    
+    assert len(quantiles) == y_pred.shape[1], \
+        f"Number of quantiles ({len(quantiles)}) must match the second dimension of y_pred ({y_pred.shape[1]})"
+
+    y_true = y_true.flatten()  # shape: (batch_size,)
+    total_loss = 0.0
+    for i, q in enumerate(quantiles):
+        if not (0 < q < 1):
+            raise ValueError(f"Quantile must be in (0, 1), got {q}")
+        error = y_true - y_pred[:, i]
+        if normalize:
+            scale = torch.abs(y_true) + 10  # add a constant to avoid high variance in error
+            error = error / scale  # normalize the error
+        loss = torch.max(q * error, (q - 1) * error) # shape: (batch_size,)
+        total_loss += loss.mean()
+    
+    return total_loss / len(quantiles)
+
+def gaussian_nll_loss(y_pred, y_pred_logvar, y_true, logvar_max=None, logvar_min=None):
+    """
+    Negative log-likelihood loss for Gaussian distribution.
+    Args:
+        y_pred: Predicted mean values.
+        y_pred_logvar: Predicted log variance values. More stable than using variance directly.
+        y_true: True values.
+        logvar_max: Maximum value for log variance (optional).
+        logvar_min: Minimum value for log variance (optional).
+    Returns:
+        Computed negative log-likelihood loss.
+    """
+    if logvar_max is not None or logvar_min is not None:
+        y_pred_logvar = torch.clamp(y_pred_logvar, min=logvar_min, max=logvar_max)
+    var = torch.exp(y_pred_logvar)
+    # Compute the negative log likelihood
+    nll = 0.5 * (torch.log(var) + ((y_true - y_pred) ** 2) / var)
+    return nll.mean()
+

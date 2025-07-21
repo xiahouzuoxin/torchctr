@@ -409,13 +409,13 @@ class FeatureTransformer:
 
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse'
-            if 'case_sensitive' not in feat_config and category_case_sensitive:
+            if 'case_sensitive' not in feat_config:
                 feat_config['case_sensitive'] = category_case_sensitive
-            if 'outliers' not in feat_config and category_outliers:
+            if 'outliers' not in feat_config:
                 feat_config['outliers'] = category_outliers
-            if 'oov' not in feat_config and oov:
+            if 'oov' not in feat_config:
                 feat_config['oov'] = oov
-            if 'fillna' not in feat_config and category_fillna:
+            if 'fillna' not in feat_config:
                 feat_config['fillna'] = category_fillna
             hash_buckets = feat_config.get('hash_buckets', None)
             if hash_buckets:
