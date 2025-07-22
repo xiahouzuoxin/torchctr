@@ -23,6 +23,7 @@ class FeatureTransformer:
                  list_padding_value=None,
                  list_maxlen=None,
                  verbose=False,
+                 eps=1e-9,
                  **kwargs):
         """
         Feature transforming for both train and test dataset with Polars DataFrame (it's much faster than pandas DataFrame).
@@ -65,6 +66,7 @@ class FeatureTransformer:
         self.list_padding_value = list_padding_value
         self.list_maxlen = list_maxlen
         self.verbose = verbose
+        self.eps = eps
 
         for k, v in kwargs.items():
             if k.startswith('category_') or k.startswith('numerical_') or k.startswith('list_'):
@@ -348,14 +350,17 @@ class FeatureTransformer:
         if self.verbose:
             logger.info(f'Processing feature {fname}...')
 
-        if islist:
-            ret = self.process_list(feat_config, s, mode)
-        elif dtype == 'category':
-            ret = self.process_category(feat_config, s, mode)
-        elif dtype == 'numerical':
-            ret = self.process_numerical(feat_config, s, mode)
-        else:
-            raise ValueError(f'Unsupported data type: {dtype}')
+        try:
+            if islist:
+                ret = self.process_list(feat_config, s, mode)
+            elif dtype == 'category':
+                ret = self.process_category(feat_config, s, mode)
+            elif dtype == 'numerical':
+                ret = self.process_numerical(feat_config, s, mode)
+            else:
+                raise ValueError(f'Unsupported data type: {dtype}')
+        except Exception as e:
+            raise RuntimeError(f"Error processing feature {fname}: {e}") from e
 
         return ret
 
@@ -363,7 +368,7 @@ class FeatureTransformer:
         ''' Convert a series to a string series, with float/integer values considered.
         '''
         # Attempt to convert strings to integers
-        int_s = s.cast(pl.Float64, strict=False).fill_nan(None).cast(pl.UInt32, strict=False)
+        int_s = s.cast(pl.Float64, strict=False).fill_nan(None).cast(pl.Int32, strict=False)
         
         # Identify values that were successfully converted to integers
         is_int_s = int_s.is_not_null()
@@ -489,7 +494,7 @@ class FeatureTransformer:
                 old=pl.Series( feat_config['vocab'].keys() ), 
                 new=pl.Series( [v['idx'] for v in feat_config['vocab'].values()] ), 
                 default=oov_index, 
-                return_dtype=pl.UInt32
+                return_dtype=pl.Int32
             ).fill_null(oov_index)
 
         return s
@@ -502,7 +507,7 @@ class FeatureTransformer:
         bins = feat_config.get('bins', None) or feat_config.get('discret', None)
         normalize = feat_config.get('norm', None) or feat_config.get('normalize', None)
         if normalize:
-            assert normalize in ['std', '[0,1]'], f'Unsupported norm: {normalize}'
+            assert normalize in ['std', 'z-score', '[0,1]', 'minmax', 'max', 'robust', 'log1p'], f'Unsupported normalization method: {normalize}'
         assert not (bins and normalize), f'`bins` and `norm` cannot be set at the same time: {feat_config}'
 
         s = s.cast(pl.Float32)   # make sure it's float type
@@ -510,51 +515,54 @@ class FeatureTransformer:
         if mode in ('fit', 'fit_transform'):
             feat_config['type'] = 'sparse' if bins else 'dense'
 
-            if normalize:
-                # calculate mean, std, min, max
-                stats = self.df.select(
-                    mean=s.mean(), std=s.std(), 
-                    min=s.min(), max=s.max(), 
-                    cnt=s.len()
-                )
-                stats = stats.to_dicts()[0] # only 1 row
+            # calculate mean, std, min, max
+            stats = self.df.select(
+                mean=s.mean(), std=s.std(), 
+                min=s.min(), max=s.max(), 
+                median=s.median(), iqr=s.quantile(0.75) - s.quantile(0.25),
+                cnt=s.len()
+            )
+            stats = stats.to_dicts()[0] # only 1 row
 
-                # update feat_config
-                his_cnt = feat_config.get('cnt', 0)
-                feat_config['cnt'] = stats['cnt'] + his_cnt
+            # update feat_config
+            his_cnt = feat_config.get('cnt', 0)
+            feat_config['cnt'] = stats['cnt'] + his_cnt
 
-                if feat_config.get('mean') is None:
-                    feat_config['mean'] = stats['mean']
-                else:
-                    feat_config['mean'] = (feat_config.get('mean') * his_cnt + stats['mean'] * stats['cnt']) / (his_cnt + stats['cnt'])
+            if feat_config.get('mean') is None:
+                feat_config['mean'] = stats['mean']
+            else:
+                feat_config['mean'] = (feat_config.get('mean') * his_cnt + stats['mean'] * stats['cnt']) / (his_cnt + stats['cnt'])
 
-                if feat_config.get('std') is None:
-                    feat_config['std'] = stats['std']
-                else:
-                    feat_config['std'] = np.sqrt((
-                        his_cnt * (feat_config['std'] ** 2) + stats['cnt'] * (stats['std'] ** 2) + 
-                        his_cnt * (feat_config['mean'] - stats['mean']) ** 2
-                    ) / (his_cnt + stats['cnt']) )
+            if feat_config.get('std') is None:
+                feat_config['std'] = stats['std']
+            else:
+                feat_config['std'] = np.sqrt((
+                    his_cnt * (feat_config['std'] ** 2) + stats['cnt'] * (stats['std'] ** 2) + 
+                    his_cnt * (feat_config['mean'] - stats['mean']) ** 2
+                ) / (his_cnt + stats['cnt']) )
+            if feat_config['std'] < self.eps:
+                raise ValueError(f'Please check feature {name} as std is too small: {feat_config["std"]}. It may be a constant feature or all values are the same. Otherwise, please set a larger eps value.')
 
-                if feat_config.get('min') is None:
-                    feat_config['min'] = stats['min']
-                else:
-                    feat_config['min'] = min(feat_config.get('min', stats['min']), stats['min'])
+            if feat_config.get('min') is None:
+                feat_config['min'] = stats['min']
+            else:
+                feat_config['min'] = min(feat_config.get('min', stats['min']), stats['min'])
 
-                if feat_config.get('max') is None:
-                    feat_config['max'] = stats['max']
-                else:
-                    feat_config['max'] = max(feat_config.get('max', stats['max']), stats['max'])
-                
-                if 'fillna' not in feat_config and self.numerical_fillna:
-                    if self.numerical_fillna in ['mean', 'min', 'max']:
-                        feat_config['fillna'] = feat_config[self.numerical_fillna]
-                    else:
-                        feat_config['fillna'] = float(self.numerical_fillna)
+            if feat_config.get('max') is None:
+                feat_config['max'] = stats['max']
+            else:
+                feat_config['max'] = max(feat_config.get('max', stats['max']), stats['max'])
 
-                if self.verbose:
-                    logger.info(f'Feature {name} updated: mean={feat_config["mean"]}, std={feat_config["std"]}, min={feat_config["min"]}, max={feat_config["max"]}')
-            elif bins:
+            if self.verbose:
+                logger.info(f'Feature {name} updated: mean={feat_config["mean"]}, std={feat_config["std"]}, min={feat_config["min"]}, max={feat_config["max"]}')
+         
+            if 'fillna' not in feat_config:
+                if self.numerical_fillna in ['mean', 'median', 'min', 'max']:
+                    feat_config['fillna'] = float( feat_config[self.numerical_fillna] )
+                elif isinstance(self.numerical_fillna, (int, float)):
+                    feat_config['fillna'] = float( self.numerical_fillna )
+
+            if bins:
                 if isinstance(bins, int):
                     nbins = bins
                     qs = np.linspace(0, 1, num=nbins)[1:-1] # exclude 0 and 1 as there are min and max
@@ -571,18 +579,24 @@ class FeatureTransformer:
         if mode == 'fit':
             return s
         
+        fillna = feat_config.get('fillna', None)
+        if fillna:
+            s = s.fill_null(fillna).fill_nan(fillna)
+                
         if normalize:
-            fillna = feat_config.get('fillna', None)
-            if fillna:
-                s = s.fill_null(fillna).fill_nan(fillna)
-
-            if normalize == 'std':
+            if normalize in ('std', 'z-score'):
                 s = (s - feat_config['mean']) / feat_config['std']
-            elif normalize == '[0,1]':
-                s = (s - feat_config['min']) / (feat_config['max'] - feat_config['min'] + 1e-12)
+            elif normalize in ('[0,1]', 'minmax'):
+                s = (s - feat_config['min']) / (feat_config['max'] - feat_config['min'] + self.eps)
+            elif normalize == 'robust':
+                s = (s - feat_config['median']) / (feat_config['iqr'] + self.eps)
+            elif normalize == 'max':
+                s = s / (feat_config['max'].abs() + self.eps)
+            elif normalize == 'log1p':
+                s = (s + 1).log()
         elif bins:
             labels = [str(i) for i in range(feat_config['num_embeddings'])]
-            s = s.cut(feat_config['bins'], labels=labels).cast(pl.UInt32)
+            s = s.cut(feat_config['bins'], labels=labels).cast(pl.Int32)
 
         return s
 
