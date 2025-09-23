@@ -22,6 +22,7 @@ class FeatureTransformer:
                  numerical_fillna='mean',
                  list_padding_value=None,
                  list_maxlen=None,
+                 list_separator='|',
                  verbose=False,
                  eps=1e-9,
                  **kwargs):
@@ -51,6 +52,7 @@ class FeatureTransformer:
                 list_padding_value: int, default value for padding list features. Default is None will not padding. 
                     If list_maxlen is set, it will padding to the maximum length else padding to the maximum length of the data.
                 list_maxlen: int, maximum length for list features. Default is None will not truncate.
+                list_separator: str, separator for list features if the input column is string type. Default is comma '|'.
            
             verbose: bool, whether to print the processing details
 
@@ -65,6 +67,7 @@ class FeatureTransformer:
         self.numerical_fillna = numerical_fillna
         self.list_padding_value = list_padding_value
         self.list_maxlen = list_maxlen
+        self.list_separator = list_separator
         self.verbose = verbose
         self.eps = eps
 
@@ -608,10 +611,12 @@ class FeatureTransformer:
 
         # if column is string type, split by comma, make sure no space between comma
         if self.df[name].dtype == pl.String:
+            separator = feat_config.get('separator', self.list_separator)
+            feat_config['separator'] = separator
             if self.verbose:
-                logger.info(f'Feature {feat_config["name"]} is a list feature but input string type, split it by comma...')
-            s = s.str.split(',').cast(pl.List)
-        
+                logger.info(f'Feature {feat_config["name"]} is a list feature but input string type, split it by {separator}...')
+            s = s.str.split(separator).cast(pl.List)
+
         max_len = feat_config.get('maxlen', self.list_maxlen)
         if max_len:
             s = s.list.slice(0, max_len)
