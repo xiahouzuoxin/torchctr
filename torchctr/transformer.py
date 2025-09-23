@@ -342,6 +342,83 @@ class FeatureTransformer:
         
         return df
     
+    @auto_df_cvt
+    def inverse_transform(self, df: pl.DataFrame, columns: list = None):
+        """
+        Inverse transform the dataset based on the feature configurations.
+        Only support category features processed by vocabulary and numerical features processed by normalization.
+
+        Args:
+            df: pl.DataFrame, dataset to inverse transform
+            columns: list, list of columns to inverse transform. If None, inverse transform all category features with vocab.
+        Returns:
+            df: pl.DataFrame, inverse transformed dataset
+        """
+        available_columns = set( [
+            f['name'] for f in self.feat_configs 
+            if (f['dtype'] == 'category' and 'vocab' in f) or (f['dtype'] == 'numerical' and f.get('norm', None))
+        ] )
+        if columns is None:
+            columns = available_columns
+        else:
+            unavailable_columns = set(columns) - available_columns
+            if len(unavailable_columns) > 0:
+                logger.warning(f"Columns {unavailable_columns} are not available for inverse transform, ignore them.")
+            columns = list( set(columns) & available_columns )
+
+        for f in self.feat_configs:
+            if f['name'] not in columns:
+                continue
+            name = f['name']
+            # category feature with vocab
+            if f['dtype'] == 'category' and 'vocab' in f:
+                inv_map = {v['idx']: k for k, v in f['vocab'].items()}
+                oov_index = f['vocab'].get(f.get('oov', self.category_oov), {}).get('idx', 0)
+                df = df.with_columns(
+                    pl.col(name).replace_strict(
+                        old=pl.Series( list(inv_map.keys()) ), 
+                        new=pl.Series( list(inv_map.values()) ), 
+                        default=inv_map.get(oov_index, '__oov__')
+                    ).alias(name)
+                )
+            # numerical feature with normalization
+            elif f['dtype'] == 'numerical' and f.get('norm', None):
+                # all kinds of normalization
+                norm = f['norm']
+                if norm in ('std', 'z-score'):
+                    mean = f['mean']
+                    std = f['std']
+                    assert std > self.eps, f'std near zero for feature {name}, cannot inverse transform'
+                    df = df.with_columns(
+                        (pl.col(name) * std + mean).alias(name)
+                    )
+                elif norm in ('[0,1]', 'minmax'):
+                    min_val = f['min']
+                    max_val = f['max']
+                    assert max_val - min_val > self.eps, f'max-min near zero for feature {name}, cannot inverse transform'
+                    df = df.with_columns(
+                        (pl.col(name) * (max_val - min_val + self.eps) + min_val).alias(name)
+                    )
+                elif norm == 'max':
+                    max_val = f['max']
+                    df = df.with_columns(
+                        (pl.col(name) * (max_val + self.eps)).alias(name)
+                    )
+                elif norm == 'robust':
+                    median = f['median']
+                    iqr = f['iqr']
+                    df = df.with_columns(
+                        (pl.col(name) * (iqr + self.eps) + median).alias(name)
+                    )
+                elif norm == 'log1p':
+                    df = df.with_columns(
+                        (pl.col(name).exp() - 1).alias(name)
+                    )
+                else:
+                    raise ValueError(f'Unsupported normalization parameters for feature {name}: {norm}')
+
+        return df
+
     def process_one(self, s, feat_config, mode: str='transform'):
         """
         Transform a single feature based on the feature configuration.
