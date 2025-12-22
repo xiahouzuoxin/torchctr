@@ -32,14 +32,6 @@ def get_logger(name, level=logging.INFO, use_accelerate=False):
 
 logger = get_logger("torchctr")
 
-try:
-    import sklearn
-    from sklearn.utils import murmurhash3_32
-    from sklearn.model_selection import train_test_split, GroupShuffleSplit
-    logger.info(f"Scikit-learn version {sklearn.__version__} is available.")
-except ImportError:
-    logger.warning('''Scikit-learn is not available. Please install it with `pip install scikit-learn`.''')
-
 def auto_generate_feature_configs(
         df: pd.DataFrame, 
         columns: list = None,
@@ -100,22 +92,22 @@ def auto_generate_feature_configs(
     
     return feat_configs
 
-def hash_bucket(v, buckets, method='murmurhash3', seed=0):
-    """
-    Hash function to map a value to a hash bucket
-    """
-    if method == 'murmurhash3':
-        if not 'murmurhash3_32' in globals():
-            logger.warning_once("murmurhash3_32 is not available in `hash_bucket`, rolling back to sha256.")
-            method = 'sha256'
-    
-    if method == 'murmurhash3':
-        hash_integer = murmurhash3_32(str(v), seed=seed, positive=True)
-    else:
-        input = f'Seed{seed}:{v}'
-        hash_object = hashlib.sha256(input.encode())
-        hash_digest = hash_object.hexdigest()
+def hash_bucket_fn(v, buckets, method="murmurhash3", seed=0):
+    if method == "murmurhash3":
+        try:
+            from sklearn.utils import murmurhash3_32
+            hash_integer = murmurhash3_32(str(v), seed=seed, positive=True)
+        except Exception:
+            logger.warning(
+                "murmurhash3_32 import failed from sklearn.utils, falling back to sha256."
+            )
+            method = "sha256"
+
+    if method != "murmurhash3":
+        input_str = f"Seed{seed}:{v}"
+        hash_digest = hashlib.sha256(input_str.encode()).hexdigest()
         hash_integer = int(hash_digest, 16)
+
     return hash_integer % buckets
 
 def pad_list(arr_list, padding_value, max_len=None):
@@ -177,6 +169,8 @@ def disk_cache(cache_dir='.cache'):
     return decorator
 
 def traintest_split(df, test_size=0.2, shuffle=True, group_id=None, random_state=0):
+    from sklearn.model_selection import train_test_split, GroupShuffleSplit
+
     if group_id is None:
         train_df, test_df = train_test_split(df, test_size=test_size, shuffle=shuffle, random_state=random_state)
     else:

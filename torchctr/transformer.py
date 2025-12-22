@@ -879,7 +879,7 @@ class FeatureTransformer:
             if f['dtype'] != 'category':
                 continue
             cur_vocab_file = f.get('vocab', vocab_file)
-            if not isinstance(vocab_file, str):
+            if not isinstance(cur_vocab_file, str):
                 # may already existing vocab, not load from vocab file
                 continue
             if not os.path.exists(cur_vocab_file):
