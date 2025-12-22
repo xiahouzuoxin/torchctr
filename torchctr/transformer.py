@@ -282,99 +282,132 @@ class FeatureTransformer:
         assert all([f['dtype'] in ['category', 'numerical'] for f in feat_configs]), 'Only support category and numerical features'
         return feat_configs 
 
-    def fit_path(self, input_path: str, batch_size: int = None, skip_features: list = [], **kwargs):
+    def _get_output(self, trans_df, output_path, part_idx=None):
+        if output_path is None:
+            return trans_df
+        
+        if part_idx is not None:
+            os.makedirs(output_path, exist_ok=True)
+            output_path = os.path.join(output_path, f"part-{part_idx:05d}.parquet")
+        
+        trans_df.write_parquet(output_path)
+        return output_path
+
+    def fit(
+        self, 
+        input: str | pl.LazyFrame | pl.DataFrame, 
+        batch_size: int = None, 
+        skip_features: list = [], 
+        **kwargs
+    ):
         """
-        Fit the feature transformer based on the parquet file dataset.
-        Can be run multiple times if cannot load all data into memory at once.
+        Fit the feature transformer based on the input dataset.
 
         Args:
-            input_path: str, path to the parquet file dataset
+            input: str or pl.LazyFrame or pl.DataFrame, path to the parquet file dataset or polars LazyFrame or DataFrame
             skip_features: list, skip the features in the list and not update them
             batch_size: int, number of rows to read at a time. If None, read all data at once.
         Returns:
             self: FeatureTransformer
         """
-        print(f'Fitting feature transformer from {input_path} with batch_size={batch_size}...')
-
+        if isinstance(input, pl.DataFrame):
+            # batch_size is ignored
+            return self._fit(input, skip_features=skip_features)
+        
+        lf = pl.scan_parquet(input, **kwargs) if isinstance(input, str) else input
         if batch_size is None:
-            df = pl.scan_parquet(input_path, **kwargs).collect()
-            return self.fit(df, skip_features=skip_features)
-
-        lf = pl.scan_parquet(input_path, **kwargs)
+            df = lf.collect()
+            return self._fit(df, skip_features=skip_features)
+        # streaming / batch fit
         for df in lf.collect(engine='streaming').iter_slices(batch_size):
-            self.fit(df, skip_features=skip_features)
+            self._fit(df, skip_features=skip_features)
 
         return self
 
-    def transform_path(self, input_path: str, output_path: str, batch_size: int = None, **kwargs):
+    def transform(
+            self, input: str | pl.LazyFrame | pl.DataFrame, 
+            output_path: str = None, 
+            batch_size: int = None, 
+            **kwargs
+    ):
         """
-        Transform the dataset based on the parquet file dataset.
+        Transform the dataset.
 
         Args:
-            input_path: str, path to the parquet file dataset
-            output_path: str, path to save the transformed parquet file dataset
+            input: str or pl.LazyFrame or pl.DataFrame, path to the parquet file dataset or polars LazyFrame or DataFrame
+            output_path: str, path to save the transformed parquet file dataset, must be provided when batch_size is set.
             batch_size: int, number of rows to read at a time. If None, read all data at once.
         Returns:
-            processed_rows: int
+            If output_path is None, return the transformed pl.DataFrame
+            If output_path is provided, return the output path
         """
+
+        if isinstance(input, pl.DataFrame):
+            trans_df = self._transform(input)
+            return self._get_output(trans_df, output_path)
+        
+        lf = pl.scan_parquet(input, **kwargs) if isinstance(input, str) else input
         if batch_size is None:
-            df = pl.scan_parquet(input_path, **kwargs).collect()
-            trans_df = self.transform(df)
-            trans_df.write_parquet(output_path)
-            return trans_df.height
-
-        os.makedirs(output_path, exist_ok=True)
-
-        processed_rows = 0
+            df = lf.collect()
+            trans_df = self._transform(df)
+            return self._get_output(trans_df, output_path)
+            
+        assert output_path is not None, "output_path must be provided when batch_size is set."
         part_idx = 0
-        lf = pl.scan_parquet(input_path, **kwargs)
         for df in lf.collect(engine='streaming').iter_slices(batch_size):
-            trans_df = self.transform(df)
-            part_path = os.path.join(output_path, f"part-{part_idx:05d}.parquet")
-            trans_df.write_parquet(part_path)
-            processed_rows += trans_df.height
+            trans_df = self._transform(df)
+            self._get_output(trans_df, output_path, part_idx)
             part_idx += 1
-
-        return processed_rows
+        return output_path
     
-    def fit_transform_path(
+    def fit_transform(
         self,
-        input_path: str,
-        output_path: str,
+        input: str | pl.LazyFrame | pl.DataFrame,
+        output_path: str = None,
         batch_size: int = None,
+        skip_features: list = [],
         **kwargs,
     ):
         """
-        Fit and transform the dataset based on a parquet file dataset.
+        Fit and transform the dataset.
 
         Args:
-            input_path: str, path to the parquet file dataset
-            output_path: str, path to save the transformed parquet file dataset
+            input: str or pl.LazyFrame, path to the parquet file dataset or polars LazyFrame
+            output_path: str, path to save the transformed parquet file dataset. Must be provided when batch_size is set.
             batch_size: int, number of rows to read at a time. If None, read all data at once.
+            skip_features: list, skip the features in the list and not update them
         Returns:
-            processed_rows: int
+            If batch_size is None, return the transformed pl.DataFrame height
+            If batch_size is provided, return the output path
         """
+        if isinstance(input, pl.DataFrame):
+            df = self._fit_transform(input)
+            return self._get_output(df, output_path)
+            
+        lf = pl.scan_parquet(input, **kwargs) if isinstance(input, str) else input
         if batch_size is None:
-            df = pl.read_parquet(input_path, **kwargs)
-            trans_df = self.fit_transform(df)
-            trans_df.write_parquet(output_path)
-            return trans_df.height
+            df = lf.collect()
+            trans_df = self._fit_transform(df)
+            return self._get_output(trans_df, output_path)
 
         # 1) fit: streaming / batch
-        self.fit_path(input_path, batch_size=batch_size, **kwargs)
+        self.fit(
+            input, 
+            batch_size=batch_size, 
+            skip_features=skip_features, 
+            **kwargs
+        )
 
         # 2) transform: streaming / batch
-        processed_rows = self.transform_path(
-            input_path,
+        return self.transform(
+            input,
             output_path,
             batch_size=batch_size,
             **kwargs,
         )
 
-        return processed_rows
-
     @auto_df_cvt
-    def fit(self, df: pl.DataFrame, skip_features: list = []):
+    def _fit(self, df: pl.DataFrame, skip_features: list = []):
         """
         Fit the feature transformer based on the training dataset.
         Can be run it multiple times with multiple datasets to update the feature configurations when cannot load all data into memory at once.
@@ -413,7 +446,7 @@ class FeatureTransformer:
         return self
     
     @auto_df_cvt
-    def transform(self, df: pl.DataFrame):
+    def _transform(self, df: pl.DataFrame):
         """
         Transform the dataset based on the feature configurations.
 
@@ -442,7 +475,7 @@ class FeatureTransformer:
         return df
 
     @auto_df_cvt
-    def fit_transform(self, df: pl.DataFrame):
+    def _fit_transform(self, df: pl.DataFrame):
         """
         Fit and transform the dataset based on the feature configurations.
 
@@ -739,18 +772,20 @@ class FeatureTransformer:
             his_cnt = feat_config.get('cnt', 0)
             feat_config['cnt'] = stats['cnt'] + his_cnt
 
-            if feat_config.get('mean') is None:
+            if his_cnt == 0 or feat_config.get('mean') is None:
                 feat_config['mean'] = stats['mean']
-            else:
-                feat_config['mean'] = (feat_config.get('mean') * his_cnt + stats['mean'] * stats['cnt']) / (his_cnt + stats['cnt'])
-
-            if feat_config.get('std') is None:
                 feat_config['std'] = stats['std']
             else:
-                feat_config['std'] = np.sqrt((
-                    his_cnt * (feat_config['std'] ** 2) + stats['cnt'] * (stats['std'] ** 2) + 
-                    his_cnt * (feat_config['mean'] - stats['mean']) ** 2
-                ) / (his_cnt + stats['cnt']) )
+                prev_mean = feat_config['mean']
+                prev_std = feat_config['std']
+                total_cnt = his_cnt + stats['cnt']
+                delta = stats['mean'] - prev_mean
+                feat_config['mean'] = prev_mean + delta * (stats['cnt'] / total_cnt)
+
+                m2_prev = (his_cnt - 1) * (prev_std ** 2) if his_cnt > 1 else 0.0
+                m2_new = (stats['cnt'] - 1) * (stats['std'] ** 2) if stats['cnt'] > 1 else 0.0
+                m2 = m2_prev + m2_new + (delta ** 2) * (his_cnt * stats['cnt'] / total_cnt)
+                feat_config['std'] = np.sqrt(m2 / (total_cnt - 1)) if total_cnt > 1 else 0.0
             if feat_config['std'] < self.eps:
                 raise ValueError(f'Please check feature {name} as std is too small: {feat_config["std"]}. It may be a constant feature or all values are the same. Otherwise, please set a larger eps value.')
 
@@ -1023,56 +1058,3 @@ class FeatureTransformer:
             feat_configs[k]['vocab'] = vocab_cache[cur_vocab_file].get(f['name'], {})
 
         return cls(feat_configs=feat_configs)
-    
-if __name__ == '__main__':
-    # Test the FeatureTransformer with a sample parquet file
-    # generate a sample parquet file
-
-    import polars as pl
-    import numpy as np
-    num_rows = 10000
-
-
-    list_cat = [
-        f"{a},{b}"
-        for a, b in zip(
-            np.random.choice(['L1', 'L2', 'L3'], size=num_rows),
-            np.random.choice(['L1', 'L2', 'L3'], size=num_rows),
-        )
-    ]
-    list_num = [
-        f"{a:.2f},{b:.2f}"
-        for a, b in zip(
-            np.random.rand(num_rows) * 100,
-            np.random.rand(num_rows) * 100,
-        )
-    ]
-    df = pl.DataFrame({
-        'cat1': np.random.choice(['A', 'B', 'C', 'D'], size=num_rows),
-        'cat2': np.random.choice(['X', 'Y', 'Z'], size=num_rows),
-        'num1': np.random.randn(num_rows) * 10 + 50,
-        'num2': np.random.rand(num_rows) * 100,
-        'list_cat': list_cat,
-        'list_num': list_num,
-    })
-    sample_parquet = 'sample_data.parquet'
-    df.write_parquet(sample_parquet)
-
-    # test fit with parquet file
-    ft = FeatureTransformer()
-
-    # ft.fit_path(sample_parquet)
-    # ft.transform_path(
-    #     sample_parquet,
-    #     output_path='transformed_data',
-    #     batch_size=2000,
-    # )
-
-    ft.fit_transform_path(
-        sample_parquet,
-        output_path='transformed_data',
-        batch_size=None,
-    )
-
-    print( pl.read_parquet('transformed_data/').head(10) )
-    print(ft.get_feat_configs())

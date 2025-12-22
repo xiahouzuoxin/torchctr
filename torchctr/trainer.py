@@ -12,7 +12,7 @@ from .utils import logger, get_logger
 try:
     from torch.utils.tensorboard import SummaryWriter
     has_tensorboard = True
-except ImportError:
+except:
     has_tensorboard = False
     logger.warning('Tensorboard is not available. Please install it with `pip install tensorboard`.')
 
@@ -20,7 +20,7 @@ try:
     from accelerate import Accelerator
     # from accelerate import DataLoaderConfiguration
     has_accelerate = True
-except ImportError:
+except:
     has_accelerate = False
     logger.warning('Accelerate is not available. Please install it with `pip install accelerate`.')
 
