@@ -61,3 +61,12 @@ if __name__ == '__main__':
     )
     print( pl.read_parquet('data/transformed_data').head(10) )
     print(ft3.get_feat_configs())
+
+    # test split function
+    print("====> Test split function...")
+    lf = pl.scan_parquet(sample_parquet)
+    train_df, test_df = ft.split(lf, test_frac=0.2, shuffle=True, random_seed=123, group_col='cat1')
+    print("Train DataFrame:")
+    print(train_df.collect().shape)
+    print("\nTest DataFrame:")
+    print(test_df.collect().shape)

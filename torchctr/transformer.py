@@ -218,39 +218,52 @@ class FeatureTransformer:
 
     @staticmethod
     @auto_df_cvt
-    def split(df: pl.DataFrame, group_col: str = None, test_size: float = 0.2, shuffle: bool = True, random_state: int = 3407):
+    def split(df: pl.LazyFrame | pl.DataFrame, 
+              test_frac: float = 0.2, 
+              group_col: str | None = None, 
+              shuffle: bool = True, 
+              random_seed: int = 42
+    ):
         """
         Split the dataset into train and test datasets.
         
         Args:
             df (pl.DataFrame): The input DataFrame to split.
             group_col (str, optional): Column name for group-based splitting. Default is None.
-            test_size (float, optional): Proportion of the dataset to include in the test split. Default is 0.2.
+            test_frac (float, optional): Proportion of the dataset to include in the test split. Default is 0.2.
             shuffle (bool, optional): Whether to shuffle the data before splitting. Default is True.
-            random_state (int, optional): Random seed for reproducibility. Default is 3407.
+            random_seed (int, optional): Random seed for reproducibility. Default is 42.
         
         Returns:
             (pl.DataFrame, pl.DataFrame): Train and test DataFrames.
         """
+        if not 0 < test_frac < 1:
+            raise ValueError("test_frac must be between 0 and 1")
+
         if group_col:
-            groups = df.select(pl.col(group_col)).unique().to_numpy().flatten()
-            if shuffle:
-                np.random.seed(random_state)
-                np.random.shuffle(groups)
-            split_idx = int(len(groups) * (1 - test_size))
-            train_groups, test_groups = groups[:split_idx], groups[split_idx:]
-
-            train_df = df.filter(pl.col(group_col).is_in(train_groups))
-            test_df = df.filter(pl.col(group_col).is_in(test_groups))
+            # generate one random number per group
+            hash_expr = pl.col(group_col).hash()
         else:
-            if shuffle:
-                df = df.sample(fraction=1.0, shuffle=True, with_replacement=False, seed=random_state)
-            split_idx = int(df.height * (1 - test_size))
-            
-            train_df = df.slice(0, split_idx)
-            test_df = df.slice(split_idx, None)
+            # generate one random number per row
+            hash_expr = pl.struct(df.collect_schema().keys()).hash()
 
-        return train_df, test_df
+        df = df.with_columns([
+            (
+                ((hash_expr + random_seed) * 9301 + 49297) % 233280 / 233280
+            ).alias("rand")
+        ])
+
+        df_train = df.filter(pl.col("rand") >= test_frac)
+        df_eval = df.filter(pl.col("rand") < test_frac)
+
+        if shuffle:
+            df_train = df_train.sort("rand")
+            df_eval = df_eval.sort("rand")
+        
+        df_train = df_train.drop("rand")
+        df_eval = df_eval.drop("rand")
+
+        return df_train, df_eval
 
     def _init_context(self, df: pl.DataFrame):
         if '_index' not in df.columns:
