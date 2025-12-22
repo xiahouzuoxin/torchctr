@@ -5,8 +5,47 @@ import os
 import numpy as np
 import pandas as pd
 import polars as pl
-from .utils import jsonify, logger
-from .utils import hash_bucket as hash_bucket_fn
+import logging
+import hashlib
+# from .utils import jsonify, logger
+# from .utils import hash_bucket as hash_bucket_fn
+
+logger = logging.getLogger(__name__)
+
+def hash_bucket_fn(v, buckets, method="murmurhash3", seed=0):
+    if method == "murmurhash3":
+        try:
+            from sklearn.utils import murmurhash3_32
+            hash_integer = murmurhash3_32(str(v), seed=seed, positive=True)
+        except Exception:
+            logger.warning(
+                "murmurhash3_32 import failed from sklearn.utils, falling back to sha256."
+            )
+            method = "sha256"
+
+    if method != "murmurhash3":
+        input_str = f"Seed{seed}:{v}"
+        hash_digest = hashlib.sha256(input_str.encode()).hexdigest()
+        hash_integer = int(hash_digest, 16)
+
+    return hash_integer % buckets
+
+def jsonify(obj):
+    def encoder(obj):
+        if isinstance(obj, pd.Timestamp):
+            return str(obj)
+        elif isinstance(obj, pd.DataFrame):
+            return obj.to_dict(orient="records")
+        elif isinstance(obj, (np.integer, np.int64)):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif np.isnan(obj):
+            return None
+        raise TypeError(repr(obj) + " is not JSON serializable")
+    return json.loads(json.dumps(obj, default=encoder))
 
 class FeatureTransformer:
     _auto_df_convert_enable = True
@@ -108,6 +147,7 @@ class FeatureTransformer:
                     return result
                 else:
                     return func(*args, **kwargs)
+            return func(*args, **kwargs)
         return wrapper
 
     @staticmethod
@@ -241,6 +281,97 @@ class FeatureTransformer:
 
         assert all([f['dtype'] in ['category', 'numerical'] for f in feat_configs]), 'Only support category and numerical features'
         return feat_configs 
+
+    def fit_path(self, input_path: str, batch_size: int = None, skip_features: list = [], **kwargs):
+        """
+        Fit the feature transformer based on the parquet file dataset.
+        Can be run multiple times if cannot load all data into memory at once.
+
+        Args:
+            input_path: str, path to the parquet file dataset
+            skip_features: list, skip the features in the list and not update them
+            batch_size: int, number of rows to read at a time. If None, read all data at once.
+        Returns:
+            self: FeatureTransformer
+        """
+        print(f'Fitting feature transformer from {input_path} with batch_size={batch_size}...')
+
+        if batch_size is None:
+            df = pl.scan_parquet(input_path, **kwargs).collect()
+            return self.fit(df, skip_features=skip_features)
+
+        lf = pl.scan_parquet(input_path, **kwargs)
+        for df in lf.collect(engine='streaming').iter_slices(batch_size):
+            self.fit(df, skip_features=skip_features)
+
+        return self
+
+    def transform_path(self, input_path: str, output_path: str, batch_size: int = None, **kwargs):
+        """
+        Transform the dataset based on the parquet file dataset.
+
+        Args:
+            input_path: str, path to the parquet file dataset
+            output_path: str, path to save the transformed parquet file dataset
+            batch_size: int, number of rows to read at a time. If None, read all data at once.
+        Returns:
+            processed_rows: int
+        """
+        if batch_size is None:
+            df = pl.scan_parquet(input_path, **kwargs).collect()
+            trans_df = self.transform(df)
+            trans_df.write_parquet(output_path)
+            return trans_df.height
+
+        os.makedirs(output_path, exist_ok=True)
+
+        processed_rows = 0
+        part_idx = 0
+        lf = pl.scan_parquet(input_path, **kwargs)
+        for df in lf.collect(engine='streaming').iter_slices(batch_size):
+            trans_df = self.transform(df)
+            part_path = os.path.join(output_path, f"part-{part_idx:05d}.parquet")
+            trans_df.write_parquet(part_path)
+            processed_rows += trans_df.height
+            part_idx += 1
+
+        return processed_rows
+    
+    def fit_transform_path(
+        self,
+        input_path: str,
+        output_path: str,
+        batch_size: int = None,
+        **kwargs,
+    ):
+        """
+        Fit and transform the dataset based on a parquet file dataset.
+
+        Args:
+            input_path: str, path to the parquet file dataset
+            output_path: str, path to save the transformed parquet file dataset
+            batch_size: int, number of rows to read at a time. If None, read all data at once.
+        Returns:
+            processed_rows: int
+        """
+        if batch_size is None:
+            df = pl.read_parquet(input_path, **kwargs)
+            trans_df = self.fit_transform(df)
+            trans_df.write_parquet(output_path)
+            return trans_df.height
+
+        # 1) fit: streaming / batch
+        self.fit_path(input_path, batch_size=batch_size, **kwargs)
+
+        # 2) transform: streaming / batch
+        processed_rows = self.transform_path(
+            input_path,
+            output_path,
+            batch_size=batch_size,
+            **kwargs,
+        )
+
+        return processed_rows
 
     @auto_df_cvt
     def fit(self, df: pl.DataFrame, skip_features: list = []):
@@ -892,3 +1023,56 @@ class FeatureTransformer:
             feat_configs[k]['vocab'] = vocab_cache[cur_vocab_file].get(f['name'], {})
 
         return cls(feat_configs=feat_configs)
+    
+if __name__ == '__main__':
+    # Test the FeatureTransformer with a sample parquet file
+    # generate a sample parquet file
+
+    import polars as pl
+    import numpy as np
+    num_rows = 10000
+
+
+    list_cat = [
+        f"{a},{b}"
+        for a, b in zip(
+            np.random.choice(['L1', 'L2', 'L3'], size=num_rows),
+            np.random.choice(['L1', 'L2', 'L3'], size=num_rows),
+        )
+    ]
+    list_num = [
+        f"{a:.2f},{b:.2f}"
+        for a, b in zip(
+            np.random.rand(num_rows) * 100,
+            np.random.rand(num_rows) * 100,
+        )
+    ]
+    df = pl.DataFrame({
+        'cat1': np.random.choice(['A', 'B', 'C', 'D'], size=num_rows),
+        'cat2': np.random.choice(['X', 'Y', 'Z'], size=num_rows),
+        'num1': np.random.randn(num_rows) * 10 + 50,
+        'num2': np.random.rand(num_rows) * 100,
+        'list_cat': list_cat,
+        'list_num': list_num,
+    })
+    sample_parquet = 'sample_data.parquet'
+    df.write_parquet(sample_parquet)
+
+    # test fit with parquet file
+    ft = FeatureTransformer()
+
+    # ft.fit_path(sample_parquet)
+    # ft.transform_path(
+    #     sample_parquet,
+    #     output_path='transformed_data',
+    #     batch_size=2000,
+    # )
+
+    ft.fit_transform_path(
+        sample_parquet,
+        output_path='transformed_data',
+        batch_size=None,
+    )
+
+    print( pl.read_parquet('transformed_data/').head(10) )
+    print(ft.get_feat_configs())
